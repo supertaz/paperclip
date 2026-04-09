@@ -44,6 +44,13 @@ function discoverWorkspacePackagePaths(rootDir: string): Map<string, string> {
 }
 
 const workspacePackagePaths = discoverWorkspacePackagePaths(repoRoot);
+const workspaceDirs = Array.from(
+  new Set(
+    Array.from(workspacePackagePaths.values())
+      .map((packagePath) => path.relative(repoRoot, packagePath))
+      .filter((workspaceDir) => workspaceDir.length > 0),
+  ),
+).sort();
 
 function findWorkspaceLinkMismatches(workspaceDir: string): WorkspaceLinkMismatch[] {
   const packageJson = readJsonFile(path.join(repoRoot, workspaceDir, "package.json"));
@@ -100,6 +107,6 @@ async function ensureWorkspaceLinksCurrent(workspaceDir: string) {
   );
 }
 
-for (const workspaceDir of ["server", "ui"]) {
+for (const workspaceDir of workspaceDirs) {
   await ensureWorkspaceLinksCurrent(workspaceDir);
 }

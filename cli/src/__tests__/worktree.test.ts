@@ -573,6 +573,7 @@ describe("worktree helpers", () => {
     try {
       fs.mkdirSync(path.dirname(currentPaths.configPath), { recursive: true });
       fs.mkdirSync(path.dirname(sourcePaths.configPath), { recursive: true });
+      fs.mkdirSync(path.dirname(sourcePaths.secretsKeyFilePath), { recursive: true });
       fs.mkdirSync(repoRoot, { recursive: true });
       fs.mkdirSync(sourceRoot, { recursive: true });
 
@@ -590,6 +591,7 @@ describe("worktree helpers", () => {
       });
       fs.writeFileSync(currentPaths.configPath, JSON.stringify(currentConfig, null, 2), "utf8");
       fs.writeFileSync(sourcePaths.configPath, JSON.stringify(sourceConfig, null, 2), "utf8");
+      fs.writeFileSync(sourcePaths.secretsKeyFilePath, "source-secret", "utf8");
       fs.writeFileSync(
         currentPaths.envPath,
         [
@@ -606,7 +608,6 @@ describe("worktree helpers", () => {
 
       await worktreeReseedCommand({
         fromConfig: sourcePaths.configPath,
-        seed: false,
         yes: true,
       });
 
@@ -628,7 +629,7 @@ describe("worktree helpers", () => {
       }
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("restores the current worktree config and instance data if reseed fails", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-worktree-reseed-rollback-"));
