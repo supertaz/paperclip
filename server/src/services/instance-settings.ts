@@ -97,6 +97,33 @@ export function instanceSettingsService(db: Db) {
     throw new Error("Failed to initialize instance settings row");
   }
 
+  async function getSystemPauseState(): Promise<{ paused: boolean; pausedAt: string | null; pauseReason: string | null }> {
+    const row = await getOrCreateRow();
+    const raw = (row.general ?? {}) as Record<string, unknown>;
+    return {
+      paused: raw._systemPaused === true,
+      pausedAt: typeof raw._systemPausedAt === "string" ? raw._systemPausedAt : null,
+      pauseReason: typeof raw._systemPauseReason === "string" ? raw._systemPauseReason : null,
+    };
+  }
+
+  async function setSystemPause(paused: boolean, reason?: string): Promise<void> {
+    const row = await getOrCreateRow();
+    const raw = (row.general ?? {}) as Record<string, unknown>;
+    const now = new Date();
+    const next: Record<string, unknown> = { ...raw };
+    if (paused) {
+      next._systemPaused = true;
+      next._systemPausedAt = now.toISOString();
+      next._systemPauseReason = reason ?? null;
+    } else {
+      delete next._systemPaused;
+      delete next._systemPausedAt;
+      delete next._systemPauseReason;
+    }
+    await db.update(instanceSettings).set({ general: next, updatedAt: now }).where(eq(instanceSettings.id, row.id));
+  }
+
   return {
     get: async (): Promise<InstanceSettings> => toInstanceSettings(await getOrCreateRow()),
 
@@ -104,6 +131,10 @@ export function instanceSettingsService(db: Db) {
       const row = await getOrCreateRow();
       return normalizeGeneralSettings(row.general);
     },
+
+    getSystemPauseState,
+    pause: (reason?: string) => setSystemPause(true, reason),
+    unpause: () => setSystemPause(false),
 
     getExperimental: async (): Promise<InstanceExperimentalSettings> => {
       const row = await getOrCreateRow();

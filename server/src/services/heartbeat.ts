@@ -6424,6 +6424,12 @@ export function heartbeatService(db: Db) {
   }
 
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
+    const { paused } = await instanceSettings.getSystemPauseState();
+    if (paused) {
+      logger.info({ agentId, source: opts.source }, "system paused — skipping enqueue");
+      return null;
+    }
+
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
@@ -7599,6 +7605,12 @@ export function heartbeatService(db: Db) {
     reconcileIssueGraphLiveness,
 
     tickTimers: async (now = new Date()) => {
+      const { paused } = await instanceSettings.getSystemPauseState();
+      if (paused) {
+        logger.info("system paused — heartbeat tick skipped");
+        return { checked: 0, enqueued: 0, skipped: 0 };
+      }
+
       const allAgents = await db.select().from(agents);
       let checked = 0;
       let enqueued = 0;
