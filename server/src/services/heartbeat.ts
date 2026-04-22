@@ -1873,6 +1873,32 @@ export function heartbeatService(db: Db) {
     return unsafeTextProjectionPromise;
   }
 
+  // Rolling enqueue counter for per-agent runaway detection (Track D).
+  const RUNAWAY_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+  const RUNAWAY_THRESHOLD = 10; // enqueues in window
+  const enqueueTimestamps = new Map<string, number[]>();
+
+  async function recordEnqueueAndCheckRunaway(agentId: string, agentName: string): Promise<void> {
+    const now = Date.now();
+    const cutoff = now - RUNAWAY_WINDOW_MS;
+    const times = (enqueueTimestamps.get(agentId) ?? []).filter((t) => t > cutoff);
+    times.push(now);
+    enqueueTimestamps.set(agentId, times);
+
+    if (times.length >= RUNAWAY_THRESHOLD) {
+      const reason = `auto-paused: ${times.length} enqueues in last 5 minutes (threshold: ${RUNAWAY_THRESHOLD})`;
+      logger.warn({ agentId, agentName, enqueueCount: times.length }, "runaway detector triggered — auto-pausing agent");
+      enqueueTimestamps.delete(agentId);
+      const [current] = await db.select({ runtimeConfig: agents.runtimeConfig }).from(agents).where(eq(agents.id, agentId));
+      if (current) {
+        await db.update(agents).set({
+          runtimeConfig: { ...(current.runtimeConfig ?? {}), autoPause: { paused: true, reason, triggeredAt: new Date().toISOString() } },
+          updatedAt: new Date(),
+        }).where(eq(agents.id, agentId));
+      }
+    }
+  }
+
   async function getAgent(agentId: string) {
     return db
       .select()
@@ -6451,6 +6477,13 @@ export function heartbeatService(db: Db) {
 
     const agent = await getAgent(agentId);
     if (!agent) throw notFound("Agent not found");
+
+    const autoPause = (agent.runtimeConfig as Record<string, unknown> | null)?.autoPause as { paused?: boolean } | undefined;
+    if (autoPause?.paused) {
+      logger.info({ agentId, agentName: agent.name, source: opts.source }, "agent auto-paused — skipping enqueue");
+      return null;
+    }
+
     const explicitResumeSession = await resolveExplicitResumeSessionOverride(agent, payload, taskKey);
     if (explicitResumeSession) {
       enrichedContextSnapshot.resumeFromRunId = explicitResumeSession.resumeFromRunId;
@@ -6920,6 +6953,7 @@ export function heartbeatService(db: Db) {
       });
 
       await startNextQueuedRunForAgent(agent.id);
+      void recordEnqueueAndCheckRunaway(agentId, agent.name);
       return newRun;
     }
 
@@ -7073,6 +7107,7 @@ export function heartbeatService(db: Db) {
     });
 
     await startNextQueuedRunForAgent(agent.id);
+    void recordEnqueueAndCheckRunaway(agentId, agent.name);
 
     return newRun;
   }
