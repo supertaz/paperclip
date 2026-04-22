@@ -139,6 +139,10 @@ export function instanceSettingsService(db: Db) {
       return normalizeGeneralSettings(row.general);
     },
 
+    getSystemPauseState,
+    pause: (reason?: string) => setSystemPause(true, reason),
+    unpause: () => setSystemPause(false),
+
     getExperimental: async (): Promise<InstanceExperimentalSettings> => {
       const row = await getOrCreateRow();
       return normalizeExperimentalSettings(row.experimental);
