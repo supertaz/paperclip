@@ -2248,7 +2248,7 @@ export function agentRoutes(db: Db) {
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {
     assertBoard(req);
     const runId = req.params.runId as string;
-    const run = await heartbeat.cancelRun(runId);
+    const run = await heartbeat.cancelRun(runId, { userInitiated: true });
 
     if (run) {
       await logActivity(db, {
