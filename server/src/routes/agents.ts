@@ -2088,6 +2088,39 @@ export function agentRoutes(db: Db) {
     res.status(202).json(run);
   });
 
+  router.post("/agents/:id/unpause-auto", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+
+    const rc = (agent.runtimeConfig as Record<string, unknown> | null) ?? {};
+    const { autoPause: _removed, ...rest } = rc as Record<string, unknown>;
+    const [updated] = await db
+      .update(agentsTable)
+      .set({ runtimeConfig: rest, updatedAt: new Date() })
+      .where(eq(agentsTable.id, id))
+      .returning();
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "agent.auto_pause_cleared",
+      entityType: "agent",
+      entityId: id,
+      details: { agentName: agent.name },
+    });
+
+    res.json(updated ?? agent);
+  });
+
   router.post("/agents/:id/heartbeat/invoke", async (req, res) => {
     const id = req.params.id as string;
     const agent = await svc.getById(id);
