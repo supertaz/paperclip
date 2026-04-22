@@ -6563,7 +6563,25 @@ export function heartbeatService(db: Db) {
       }
     }
 
-    if (issueId) {
+    // Suppress wakeups where the requesting agent is the same agent being woken
+    // via an automation event. These are self-triggered events (e.g. agent posts
+    // a comment → comment wake fires back to the same agent). Route-level checks
+    // handle the common case; this is belt-and-suspenders for execution-stage and
+    // other paths that lack a per-caller self-check.
+    if (
+      opts.requestedByActorType === "agent" &&
+      opts.requestedByActorId === agentId &&
+      source === "automation"
+    ) {
+      await writeSkippedRequest("self_event_suppression");
+      return null;
+    }
+
+    const bypassIssueExecutionLock =
+      reason === "issue_comment_mentioned" ||
+      readNonEmptyString(enrichedContextSnapshot.wakeReason) === "issue_comment_mentioned";
+
+    if (issueId && !bypassIssueExecutionLock) {
       // Mention-triggered wakes can request input from another agent, but they must
       // still respect the issue execution lock so a second agent cannot start on the
       // same issue workspace while the assignee already has a live run.
@@ -6904,6 +6922,44 @@ export function heartbeatService(db: Db) {
       .from(heartbeatRuns)
       .where(and(eq(heartbeatRuns.agentId, agentId), inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES])))
       .orderBy(desc(heartbeatRuns.createdAt));
+
+    // Dedup: if this wake carries a comment ID that an active run already has in
+    // its context, the comment is already queued to be processed — coalesce into
+    // that run instead of spawning a follower. This stops the cascade where each
+    // comment the agent posts generates a new wakeup that bypasses the same-scope
+    // running-run coalesce gate via shouldQueueFollowupForCommentWake.
+    if (wakeCommentId) {
+      const runWithSameComment = activeRuns.find((run) => {
+        const ctx = parseObject(run.contextSnapshot);
+        return readNonEmptyString(ctx.wakeCommentId) === wakeCommentId;
+      });
+      if (runWithSameComment) {
+        const mergedContextSnapshot = mergeCoalescedContextSnapshot(
+          runWithSameComment.contextSnapshot,
+          enrichedContextSnapshot,
+        );
+        await db
+          .update(heartbeatRuns)
+          .set({ contextSnapshot: mergedContextSnapshot, updatedAt: new Date() })
+          .where(eq(heartbeatRuns.id, runWithSameComment.id));
+        await db.insert(agentWakeupRequests).values({
+          companyId: agent.companyId,
+          agentId,
+          source,
+          triggerDetail,
+          reason,
+          payload,
+          status: "coalesced",
+          coalescedCount: 1,
+          requestedByActorType: opts.requestedByActorType ?? null,
+          requestedByActorId: opts.requestedByActorId ?? null,
+          idempotencyKey: opts.idempotencyKey ?? null,
+          runId: runWithSameComment.id,
+          finishedAt: new Date(),
+        });
+        return runWithSameComment;
+      }
+    }
 
     const sameScopeQueuedRun = activeRuns.find(
       (candidate) => candidate.status === "queued" && isSameTaskScope(runTaskKey(candidate), taskKey),
