@@ -7242,6 +7242,25 @@ export function heartbeatService(db: Db) {
     await cancelPendingWakeupsForBudgetScope(scope);
   }
 
+  async function countIssueAvailabilityForTimerAgent(agentId: string, companyId: string, agentNameKey: string) {
+    const assignedRows = await db
+      .select({ id: issues.id, executionAgentNameKey: issues.executionAgentNameKey })
+      .from(issues)
+      .where(and(
+        eq(issues.companyId, companyId),
+        eq(issues.assigneeAgentId, agentId),
+        sql`${issues.status} not in ('done', 'cancelled')`,
+      ));
+
+    if (assignedRows.length === 0) return { totalAssigned: 0, available: 0 };
+
+    const available = assignedRows.filter(
+      (row) => row.executionAgentNameKey === null || row.executionAgentNameKey === agentNameKey,
+    ).length;
+
+    return { totalAssigned: assignedRows.length, available };
+  }
+
   return {
     list: async (companyId: string, agentId?: string, limit?: number) => {
       const safeForLegacyEncoding = await hasUnsafeTextProjectionDatabase();
@@ -7512,6 +7531,22 @@ export function heartbeatService(db: Db) {
         const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
         const elapsedMs = now.getTime() - baseline;
         if (elapsedMs < policy.intervalSec * 1000) continue;
+
+        // If the agent has assigned issues but ALL of them are currently locked by
+        // another execution, skip this tick — there is no issue work for it to do
+        // and the run would immediately hit 409 on every checkout attempt.
+        // Pure-task agents (zero assigned issues) are unaffected: totalAssigned === 0
+        // falls through to the normal enqueue path.
+        const agentNameKey = normalizeAgentNameKey(agent.name) ?? "";
+        const issueAvailability = await countIssueAvailabilityForTimerAgent(agent.id, agent.companyId, agentNameKey);
+        if (issueAvailability.totalAssigned > 0 && issueAvailability.available === 0) {
+          logger.debug(
+            { agentId: agent.id, totalAssigned: issueAvailability.totalAssigned },
+            "timer tick skipped: agent has assigned issues, all owned by other executions",
+          );
+          skipped += 1;
+          continue;
+        }
 
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
