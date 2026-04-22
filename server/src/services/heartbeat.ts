@@ -7114,7 +7114,7 @@ export function heartbeatService(db: Db) {
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
+  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane", opts: { userInitiated?: boolean } = {}) {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
@@ -7164,6 +7164,32 @@ export function heartbeatService(db: Db) {
 
     runningProcesses.delete(run.id);
     await finalizeAgentStatus(run.agentId, "cancelled");
+
+    if (opts.userInitiated) {
+      // Drain any queued timer-sourced runs so they don't immediately promote
+      // and re-start the agent. Non-timer queued runs (e.g. comment wakeups)
+      // are left intact and will be picked up by startNextQueuedRunForAgent below.
+      const queuedTimerRuns = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(and(
+          eq(heartbeatRuns.agentId, run.agentId),
+          eq(heartbeatRuns.status, "queued"),
+          eq(heartbeatRuns.invocationSource, "timer"),
+        ));
+      for (const timerRun of queuedTimerRuns) {
+        await setRunStatus(timerRun.id, "cancelled", {
+          finishedAt: new Date(),
+          error: "Cancelled: user cancelled the active run",
+          errorCode: "cancelled",
+        });
+        await setWakeupStatus(timerRun.wakeupRequestId, "cancelled", {
+          finishedAt: new Date(),
+          error: "Cancelled: user cancelled the active run",
+        });
+      }
+    }
+
     await startNextQueuedRunForAgent(run.agentId);
     return cancelled;
   }
@@ -7567,7 +7593,7 @@ export function heartbeatService(db: Db) {
       return { checked, enqueued, skipped };
     },
 
-    cancelRun: (runId: string) => cancelRunInternal(runId),
+    cancelRun: (runId: string, opts?: { userInitiated?: boolean }) => cancelRunInternal(runId, undefined, opts),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 
