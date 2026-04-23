@@ -1873,6 +1873,59 @@ export function heartbeatService(db: Db) {
     return unsafeTextProjectionPromise;
   }
 
+  async function canEnqueueForAgent(agentId: string): Promise<{ allowed: boolean; reason?: string }> {
+    const { paused: systemPaused } = await instanceSettings.getSystemPauseState();
+    if (systemPaused) return { allowed: false, reason: "system_paused" };
+    const agent = await getAgent(agentId);
+    if (!agent) return { allowed: false, reason: "agent_not_found" };
+    if (agent.status === "paused") return { allowed: false, reason: "agent_manual_paused" };
+    const autoPause = (agent.runtimeConfig as Record<string, unknown> | null)?.autoPause as { paused?: boolean } | undefined;
+    if (autoPause?.paused) return { allowed: false, reason: "agent_auto_paused" };
+    return { allowed: true };
+  }
+
+  // Per-agent rolling enqueue timestamps for two-tier runaway detection.
+  // Thresholds are read from instance settings at trip-check time so they
+  // can be tuned via the UI without a restart.
+  const enqueueTimestamps = new Map<string, number[]>();
+
+  async function recordEnqueueAndCheckRunaway(agentId: string, agentName: string): Promise<void> {
+    const cfg = (await instanceSettings.getGeneral()).runaway;
+    if (!cfg.autoPauseEnabled) return;
+
+    const fastWindowMs = cfg.fastWindowSec * 1000;
+    const slowWindowMs = cfg.slowWindowSec * 1000;
+    const now = Date.now();
+    const slowCutoff = now - slowWindowMs;
+    const times = (enqueueTimestamps.get(agentId) ?? []).filter((t) => t > slowCutoff);
+    times.push(now);
+    enqueueTimestamps.set(agentId, times);
+
+    const fastCount = times.filter((t) => t > now - fastWindowMs).length;
+    const slowCount = times.length;
+
+    let tripReason: string | null = null;
+    if (fastCount > cfg.fastThresholdCount) {
+      tripReason = `auto-paused: ${fastCount} enqueues in last ${cfg.fastWindowSec}s (fast-trip threshold: ${cfg.fastThresholdCount})`;
+    } else if (slowCount > cfg.slowThresholdCount) {
+      tripReason = `auto-paused: ${slowCount} enqueues in last ${cfg.slowWindowSec}s (slow-trip threshold: ${cfg.slowThresholdCount})`;
+    }
+
+    if (tripReason) {
+      logger.warn({ agentId, agentName, fastCount, slowCount }, "runaway detector triggered — auto-pausing agent");
+      enqueueTimestamps.delete(agentId);
+      const [current] = await db.select({ runtimeConfig: agents.runtimeConfig }).from(agents).where(eq(agents.id, agentId));
+      if (current) {
+        await db.update(agents).set({
+          runtimeConfig: { ...(current.runtimeConfig ?? {}), autoPause: { paused: true, reason: tripReason, triggeredAt: new Date().toISOString() } },
+          updatedAt: new Date(),
+        }).where(eq(agents.id, agentId));
+      }
+      await cancelActiveForAgentInternal(agentId, tripReason);
+    }
+  }
+
+
   async function getAgent(agentId: string) {
     return db
       .select()
@@ -7535,6 +7588,14 @@ export function heartbeatService(db: Db) {
     cancelRun: (runId: string) => cancelRunInternal(runId),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
+
+    cancelAllActiveRuns: async (reason: string) => {
+      const activeAgentIds = await db
+        .selectDistinct({ agentId: heartbeatRuns.agentId })
+        .from(heartbeatRuns)
+        .where(inArray(heartbeatRuns.status, [...CANCELLABLE_HEARTBEAT_RUN_STATUSES]));
+      await Promise.all(activeAgentIds.map(({ agentId }) => cancelActiveForAgentInternal(agentId, reason)));
+    },
 
     cancelBudgetScopeWork,
 

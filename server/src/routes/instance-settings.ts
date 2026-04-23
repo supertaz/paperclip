@@ -4,6 +4,7 @@ import { patchInstanceExperimentalSettingsSchema, patchInstanceGeneralSettingsSc
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { instanceSettingsService, logActivity } from "../services/index.js";
+import { heartbeatService } from "../services/heartbeat.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 
 function assertCanManageInstanceSettings(req: Request) {
@@ -19,6 +20,7 @@ function assertCanManageInstanceSettings(req: Request) {
 export function instanceSettingsRoutes(db: Db) {
   const router = Router();
   const svc = instanceSettingsService(db);
+  const heartbeat = heartbeatService(db);
 
   router.get("/instance/settings/general", async (req, res) => {
     // General settings (e.g. keyboardShortcuts) are readable by any
@@ -93,6 +95,79 @@ export function instanceSettingsRoutes(db: Db) {
       res.json(updated.experimental);
     },
   );
+
+  router.get("/admin/status", async (req, res) => {
+    assertCanManageInstanceSettings(req);
+    const [state, [{ value: queuedRunCount }]] = await Promise.all([
+      svc.getSystemPauseState(),
+      db.select({ value: count() }).from(heartbeatRuns).where(eq(heartbeatRuns.status, "queued")),
+    ]);
+    res.json({ ...state, queuedRunCount });
+  });
+
+  router.get("/admin/agents/queued-counts", async (req, res) => {
+    assertCanManageInstanceSettings(req);
+    const rows = await db
+      .select({
+        agentId: heartbeatRuns.agentId,
+        queuedCount: count(),
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.status, "queued"))
+      .groupBy(heartbeatRuns.agentId);
+    res.json(rows);
+  });
+
+  router.post("/admin/pause", validate(z.object({ reason: z.string().optional() })), async (req, res) => {
+    assertCanManageInstanceSettings(req);
+    await svc.pause(req.body.reason);
+    await heartbeat.cancelAllActiveRuns(req.body.reason ?? "system paused by operator");
+    const state = await svc.getSystemPauseState();
+    const actor = getActorInfo(req);
+    logger.warn({ actor, reason: req.body.reason }, "system paused by operator");
+    const companyIds = await svc.listCompanyIds();
+    await Promise.all(
+      companyIds.map((companyId) =>
+        logActivity(db, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "instance.system.paused",
+          entityType: "instance_settings",
+          entityId: "system",
+          details: { reason: req.body.reason ?? null },
+        }),
+      ),
+    );
+    res.json(state);
+  });
+
+  router.post("/admin/unpause", async (req, res) => {
+    assertCanManageInstanceSettings(req);
+    await svc.unpause();
+    const state = await svc.getSystemPauseState();
+    const actor = getActorInfo(req);
+    logger.info({ actor }, "system unpaused by operator");
+    const companyIds = await svc.listCompanyIds();
+    await Promise.all(
+      companyIds.map((companyId) =>
+        logActivity(db, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "instance.system.unpaused",
+          entityType: "instance_settings",
+          entityId: "system",
+          details: {},
+        }),
+      ),
+    );
+    res.json(state);
+  });
 
   return router;
 }
