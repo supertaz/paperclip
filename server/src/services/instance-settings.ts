@@ -127,14 +127,14 @@ export function instanceSettingsService(db: Db) {
   return {
     get: async (): Promise<InstanceSettings> => toInstanceSettings(await getOrCreateRow()),
 
+    getSystemPauseState,
+    pause: (reason?: string) => setSystemPause(true, reason),
+    unpause: () => setSystemPause(false),
+
     getGeneral: async (): Promise<InstanceGeneralSettings> => {
       const row = await getOrCreateRow();
       return normalizeGeneralSettings(row.general);
     },
-
-    getSystemPauseState,
-    pause: (reason?: string) => setSystemPause(true, reason),
-    unpause: () => setSystemPause(false),
 
     getExperimental: async (): Promise<InstanceExperimentalSettings> => {
       const row = await getOrCreateRow();
