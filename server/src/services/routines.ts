@@ -1221,6 +1221,22 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
         })
         .where(eq(routines.id, id))
         .returning();
+      const wasArchived = existing.status === "archived";
+      const isNowArchived = nextStatus === "archived";
+      const isNowActive = nextStatus === "active";
+      if (!wasArchived && isNowArchived) {
+        // Archiving: disable all triggers so the scheduler stops firing them.
+        await db
+          .update(routineTriggers)
+          .set({ enabled: false, nextRunAt: null, updatedAt: new Date() })
+          .where(eq(routineTriggers.routineId, id));
+      } else if (wasArchived && isNowActive) {
+        // Unarchiving back to active: re-enable schedule triggers so they resume.
+        await db
+          .update(routineTriggers)
+          .set({ enabled: true, updatedAt: new Date() })
+          .where(and(eq(routineTriggers.routineId, id), eq(routineTriggers.kind, "schedule")));
+      }
       return updated ?? null;
     },
 
