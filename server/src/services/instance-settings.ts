@@ -3,6 +3,7 @@ import { companies, instanceSettings } from "@paperclipai/db";
 import {
   DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
   DEFAULT_BACKUP_RETENTION,
+  DEFAULT_RUNAWAY_SETTINGS,
   instanceGeneralSettingsSchema,
   type InstanceGeneralSettings,
   instanceExperimentalSettingsSchema,
@@ -24,6 +25,7 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       feedbackDataSharingPreference:
         parsed.data.feedbackDataSharingPreference ?? DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
       backupRetention: parsed.data.backupRetention ?? DEFAULT_BACKUP_RETENTION,
+      runaway: parsed.data.runaway ?? DEFAULT_RUNAWAY_SETTINGS,
     };
   }
   return {
@@ -31,6 +33,7 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
     keyboardShortcuts: false,
     feedbackDataSharingPreference: DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
     backupRetention: DEFAULT_BACKUP_RETENTION,
+    runaway: DEFAULT_RUNAWAY_SETTINGS,
   };
 }
 
@@ -107,10 +110,29 @@ export function instanceSettingsService(db: Db) {
     };
   }
 
+  async function setSystemPause(paused: boolean, reason?: string): Promise<void> {
+    const row = await getOrCreateRow();
+    const raw = (row.general ?? {}) as Record<string, unknown>;
+    const now = new Date();
+    const next: Record<string, unknown> = { ...raw };
+    if (paused) {
+      next._systemPaused = true;
+      next._systemPausedAt = now.toISOString();
+      next._systemPauseReason = reason ?? null;
+    } else {
+      delete next._systemPaused;
+      delete next._systemPausedAt;
+      delete next._systemPauseReason;
+    }
+    await db.update(instanceSettings).set({ general: next, updatedAt: now }).where(eq(instanceSettings.id, row.id));
+  }
+
   return {
     get: async (): Promise<InstanceSettings> => toInstanceSettings(await getOrCreateRow()),
 
     getSystemPauseState,
+    pause: (reason?: string) => setSystemPause(true, reason),
+    unpause: () => setSystemPause(false),
 
     getGeneral: async (): Promise<InstanceGeneralSettings> => {
       const row = await getOrCreateRow();
@@ -124,6 +146,13 @@ export function instanceSettingsService(db: Db) {
 
     updateGeneral: async (patch: PatchInstanceGeneralSettings): Promise<InstanceSettings> => {
       const current = await getOrCreateRow();
+      const raw = (current.general ?? {}) as Record<string, unknown>;
+      // Preserve _system* pause keys — they are managed exclusively by the
+      // pause/unpause API and must never be wiped by a settings PATCH.
+      const systemKeys: Record<string, unknown> = {};
+      for (const key of Object.keys(raw)) {
+        if (key.startsWith("_system")) systemKeys[key] = raw[key];
+      }
       const nextGeneral = normalizeGeneralSettings({
         ...normalizeGeneralSettings(current.general),
         ...patch,
@@ -132,7 +161,7 @@ export function instanceSettingsService(db: Db) {
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          general: { ...nextGeneral },
+          general: { ...nextGeneral, ...systemKeys },
           updatedAt: now,
         })
         .where(eq(instanceSettings.id, current.id))
