@@ -1910,8 +1910,10 @@ export function heartbeatService(db: Db) {
           updatedAt: new Date(),
         }).where(eq(agents.id, agentId));
       }
+      await cancelActiveForAgentInternal(agentId, tripReason);
     }
   }
+
 
   async function getAgent(agentId: string) {
     return db
@@ -7643,6 +7645,14 @@ export function heartbeatService(db: Db) {
     cancelRun: (runId: string) => cancelRunInternal(runId),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
+
+    cancelAllActiveRuns: async (reason: string) => {
+      const activeAgentIds = await db
+        .selectDistinct({ agentId: heartbeatRuns.agentId })
+        .from(heartbeatRuns)
+        .where(inArray(heartbeatRuns.status, [...CANCELLABLE_HEARTBEAT_RUN_STATUSES]));
+      await Promise.all(activeAgentIds.map(({ agentId }) => cancelActiveForAgentInternal(agentId, reason)));
+    },
 
     cancelBudgetScopeWork,
 

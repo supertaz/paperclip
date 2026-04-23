@@ -7,6 +7,7 @@ import { eq, count } from "drizzle-orm";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { instanceSettingsService, logActivity } from "../services/index.js";
+import { heartbeatService } from "../services/heartbeat.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
 
@@ -23,6 +24,7 @@ function assertCanManageInstanceSettings(req: Request) {
 export function instanceSettingsRoutes(db: Db) {
   const router = Router();
   const svc = instanceSettingsService(db);
+  const heartbeat = heartbeatService(db);
 
   router.get("/instance/settings/general", async (req, res) => {
     // General settings (e.g. keyboardShortcuts) are readable by any
@@ -123,6 +125,7 @@ export function instanceSettingsRoutes(db: Db) {
   router.post("/admin/pause", validate(z.object({ reason: z.string().optional() })), async (req, res) => {
     assertCanManageInstanceSettings(req);
     await svc.pause(req.body.reason);
+    await heartbeat.cancelAllActiveRuns(req.body.reason ?? "system paused by operator");
     const state = await svc.getSystemPauseState();
     const actor = getActorInfo(req);
     logger.warn({ actor, reason: req.body.reason }, "system paused by operator");
