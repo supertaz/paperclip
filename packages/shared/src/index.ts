@@ -533,6 +533,8 @@ export {
   WEEKLY_RETENTION_PRESETS,
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
+  DEFAULT_RUNAWAY_SETTINGS,
+  type RunawayDetectorSettings,
 } from "./types/instance.js";
 
 export {
