@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { NavLink, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, Clock, OctagonX, Plus } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { useSidebar } from "../context/SidebarContext";
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { heartbeatsApi } from "../api/heartbeats";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, agentRouteRef, agentUrl } from "../lib/utils";
@@ -44,6 +45,12 @@ export function SidebarAgents() {
     refetchInterval: 10_000,
   });
 
+  const { data: agentQueuedCounts } = useQuery({
+    queryKey: queryKeys.instance.agentQueuedCounts,
+    queryFn: () => instanceSettingsApi.getAgentQueuedCounts(),
+    refetchInterval: 15_000,
+  });
+
   const liveCountByAgent = useMemo(() => {
     const counts = new Map<string, number>();
     for (const run of liveRuns ?? []) {
@@ -51,6 +58,14 @@ export function SidebarAgents() {
     }
     return counts;
   }, [liveRuns]);
+
+  const queuedCountByAgent = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of agentQueuedCounts ?? []) {
+      counts.set(entry.agentId, entry.queuedCount);
+    }
+    return counts;
+  }, [agentQueuedCounts]);
 
   const visibleAgents = useMemo(() => {
     const filtered = (agents ?? []).filter(
@@ -102,6 +117,7 @@ export function SidebarAgents() {
         <div className="flex flex-col gap-0.5 mt-0.5">
           {orderedAgents.map((agent: Agent) => {
             const runCount = liveCountByAgent.get(agent.id) ?? 0;
+            const queuedCount = queuedCountByAgent.get(agent.id) ?? 0;
             return (
               <NavLink
                 key={agent.id}
@@ -119,10 +135,32 @@ export function SidebarAgents() {
               >
                 <AgentIcon icon={agent.icon} className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
                 <span className="flex-1 truncate">{agent.name}</span>
-                {(agent.pauseReason === "budget" || runCount > 0) && (
+                {(() => {
+                  const rc = agent.runtimeConfig as Record<string, unknown> | null;
+                  const isAutoPaused = (rc?.autoPause as { paused?: boolean } | undefined)?.paused === true;
+                  const hasAny = agent.pauseReason === "budget" || isAutoPaused || runCount > 0 || queuedCount > 0;
+                  return hasAny ? (
                   <span className="ml-auto flex items-center gap-1.5 shrink-0">
                     {agent.pauseReason === "budget" ? (
                       <BudgetSidebarMarker title="Agent paused by budget" />
+                    ) : null}
+                    {isAutoPaused ? (
+                      <span
+                        title="Agent auto-paused by runaway detector"
+                        aria-label="Agent auto-paused by runaway detector"
+                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500/95 text-amber-950 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+                      >
+                        <OctagonX className="h-3 w-3" />
+                      </span>
+                    ) : null}
+                    {queuedCount > 0 ? (
+                      <span
+                        title={`${queuedCount} queued run${queuedCount !== 1 ? "s" : ""}`}
+                        className="flex items-center gap-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400"
+                      >
+                        <Clock className="h-3 w-3" />
+                        {queuedCount}
+                      </span>
                     ) : null}
                     {runCount > 0 ? (
                       <span className="relative flex h-2 w-2">
@@ -136,7 +174,8 @@ export function SidebarAgents() {
                       </span>
                     ) : null}
                   </span>
-                )}
+                ) : null;
+                })()}
               </NavLink>
             );
           })}
