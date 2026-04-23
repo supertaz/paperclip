@@ -1874,27 +1874,30 @@ export function heartbeatService(db: Db) {
   }
 
   // Per-agent rolling enqueue timestamps for two-tier runaway detection.
-  const RUNAWAY_FAST_WINDOW_MS = 60 * 1000; // 1 minute
-  const RUNAWAY_FAST_THRESHOLD = 3; // trips at >3 (i.e. 4th enqueue)
-  const RUNAWAY_SLOW_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-  const RUNAWAY_SLOW_THRESHOLD = 5; // trips at >5 (i.e. 6th enqueue)
+  // Thresholds are read from instance settings at trip-check time so they
+  // can be tuned via the UI without a restart.
   const enqueueTimestamps = new Map<string, number[]>();
 
   async function recordEnqueueAndCheckRunaway(agentId: string, agentName: string): Promise<void> {
+    const cfg = (await instanceSettings.getGeneral()).runaway;
+    if (!cfg.autoPauseEnabled) return;
+
+    const fastWindowMs = cfg.fastWindowSec * 1000;
+    const slowWindowMs = cfg.slowWindowSec * 1000;
     const now = Date.now();
-    const slowCutoff = now - RUNAWAY_SLOW_WINDOW_MS;
+    const slowCutoff = now - slowWindowMs;
     const times = (enqueueTimestamps.get(agentId) ?? []).filter((t) => t > slowCutoff);
     times.push(now);
     enqueueTimestamps.set(agentId, times);
 
-    const fastCount = times.filter((t) => t > now - RUNAWAY_FAST_WINDOW_MS).length;
+    const fastCount = times.filter((t) => t > now - fastWindowMs).length;
     const slowCount = times.length;
 
     let tripReason: string | null = null;
-    if (fastCount > RUNAWAY_FAST_THRESHOLD) {
-      tripReason = `auto-paused: ${fastCount} enqueues in last 60s (fast-trip threshold: ${RUNAWAY_FAST_THRESHOLD})`;
-    } else if (slowCount > RUNAWAY_SLOW_THRESHOLD) {
-      tripReason = `auto-paused: ${slowCount} enqueues in last 5min (slow-trip threshold: ${RUNAWAY_SLOW_THRESHOLD})`;
+    if (fastCount > cfg.fastThresholdCount) {
+      tripReason = `auto-paused: ${fastCount} enqueues in last ${cfg.fastWindowSec}s (fast-trip threshold: ${cfg.fastThresholdCount})`;
+    } else if (slowCount > cfg.slowThresholdCount) {
+      tripReason = `auto-paused: ${slowCount} enqueues in last ${cfg.slowWindowSec}s (slow-trip threshold: ${cfg.slowThresholdCount})`;
     }
 
     if (tripReason) {
@@ -4831,6 +4834,8 @@ export function heartbeatService(db: Db) {
 
   async function startNextQueuedRunForAgent(agentId: string) {
     return withAgentStartLock(agentId, async () => {
+      const { paused: systemPaused } = await instanceSettings.getSystemPauseState();
+      if (systemPaused) return [];
       const agent = await getAgent(agentId);
       if (!agent) return [];
       if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {

@@ -659,26 +659,30 @@ export async function startServer(): Promise<StartedServer> {
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
     const routines = routineService(db as any);
+    const schedulerSettings = instanceSettingsService(db as any);
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
     // Before resuming, check if a large queued-run backlog indicates the system was
     // in a runaway state — auto-pause to prevent immediate re-flood on restart.
-    const STARTUP_GUARD_THRESHOLD = 50;
     void heartbeat
       .reapOrphanedRuns()
       .then(async () => {
+        const settings = instanceSettingsService(db as any);
         if (process.env.PAPERCLIP_SKIP_STARTUP_GUARD !== "1") {
-          const [{ value: queuedCount }] = await db
-            .select({ value: count() })
-            .from(heartbeatRuns)
-            .where(inArray(heartbeatRuns.status, ["queued"]));
-          if (queuedCount > STARTUP_GUARD_THRESHOLD) {
-            const settings = instanceSettingsService(db as any);
-            const { paused } = await settings.getSystemPauseState();
-            if (!paused) {
-              logger.warn({ queuedCount, threshold: STARTUP_GUARD_THRESHOLD }, "startup guard: queued-run backlog exceeds threshold — auto-pausing system");
-              await settings.pause(`startup guard: ${queuedCount} queued runs at boot (threshold: ${STARTUP_GUARD_THRESHOLD})`);
+          const general = await settings.getGeneral();
+          if (general.runaway.startupGuardEnabled) {
+            const threshold = general.runaway.startupGuardThreshold;
+            const [{ value: queuedCount }] = await db
+              .select({ value: count() })
+              .from(heartbeatRuns)
+              .where(inArray(heartbeatRuns.status, ["queued"]));
+            if (queuedCount > threshold) {
+              const { paused } = await settings.getSystemPauseState();
+              if (!paused) {
+                logger.warn({ queuedCount, threshold }, "startup guard: queued-run backlog exceeds threshold — auto-pausing system");
+                await settings.pause(`startup guard: ${queuedCount} queued runs at boot (threshold: ${threshold})`);
+              }
             }
           }
         }
@@ -720,8 +724,11 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "heartbeat timer tick failed");
         });
 
-      void routines
-        .tickScheduledTriggers(new Date())
+      void schedulerSettings.getSystemPauseState()
+        .then(({ paused }) => {
+          if (paused) return { triggered: 0 };
+          return routines.tickScheduledTriggers(new Date());
+        })
         .then((result) => {
           if (result.triggered > 0) {
             logger.info({ ...result }, "routine scheduler tick enqueued runs");
