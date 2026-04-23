@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import type { Request as ExpressRequest, RequestHandler } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, count, eq, inArray } from "drizzle-orm";
 import {
   createDb,
   ensurePostgresDatabase,
@@ -21,6 +21,7 @@ import {
   authUsers,
   companies,
   companyMemberships,
+  heartbeatRuns,
   instanceUserRoles,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
@@ -661,8 +662,27 @@ export async function startServer(): Promise<StartedServer> {
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
+    // Before resuming, check if a large queued-run backlog indicates the system was
+    // in a runaway state — auto-pause to prevent immediate re-flood on restart.
+    const STARTUP_GUARD_THRESHOLD = 50;
     void heartbeat
       .reapOrphanedRuns()
+      .then(async () => {
+        if (process.env.PAPERCLIP_SKIP_STARTUP_GUARD !== "1") {
+          const [{ value: queuedCount }] = await db
+            .select({ value: count() })
+            .from(heartbeatRuns)
+            .where(inArray(heartbeatRuns.status, ["queued"]));
+          if (queuedCount > STARTUP_GUARD_THRESHOLD) {
+            const settings = instanceSettingsService(db as any);
+            const { paused } = await settings.getSystemPauseState();
+            if (!paused) {
+              logger.warn({ queuedCount, threshold: STARTUP_GUARD_THRESHOLD }, "startup guard: queued-run backlog exceeds threshold — auto-pausing system");
+              await settings.pause(`startup guard: ${queuedCount} queued runs at boot (threshold: ${STARTUP_GUARD_THRESHOLD})`);
+            }
+          }
+        }
+      })
       .then(() => heartbeat.promoteDueScheduledRetries())
       .then(async (promotion) => {
         await heartbeat.resumeQueuedRuns();
