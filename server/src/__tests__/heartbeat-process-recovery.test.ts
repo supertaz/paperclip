@@ -640,6 +640,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
   it("queues exactly one retry when the recorded local pid is dead", async () => {
     const { agentId, runId, issueId } = await seedRunFixture({
       processPid: 999_999_999,
+      agentStatus: "idle",
     });
     const heartbeat = heartbeatService(db);
 
@@ -685,6 +686,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const { agentId, runId, issueId } = await seedRunFixture({
       processPid: orphan.processPid,
       processGroupId: orphan.processGroupId,
+      agentStatus: "idle",
     });
     const heartbeat = heartbeatService(db);
 
