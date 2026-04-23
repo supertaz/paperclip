@@ -1881,6 +1881,17 @@ export function heartbeatService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
+  async function canEnqueueForAgent(agentId: string): Promise<{ allowed: boolean; reason?: string }> {
+    const { paused: systemPaused } = await instanceSettings.getSystemPauseState();
+    if (systemPaused) return { allowed: false, reason: "system_paused" };
+    const agent = await getAgent(agentId);
+    if (!agent) return { allowed: false, reason: "agent_not_found" };
+    if (agent.status === "paused") return { allowed: false, reason: "agent_manual_paused" };
+    const autoPause = (agent.runtimeConfig as Record<string, unknown> | null)?.autoPause as { paused?: boolean } | undefined;
+    if (autoPause?.paused) return { allowed: false, reason: "agent_auto_paused" };
+    return { allowed: true };
+  }
+
   async function getRun(runId: string, opts?: { unsafeFullResultJson?: boolean }) {
     const safeForLegacyEncoding = !opts?.unsafeFullResultJson && await hasUnsafeTextProjectionDatabase();
     return db
@@ -2895,6 +2906,11 @@ export function heartbeatService(db: Db) {
     agent: typeof agents.$inferSelect,
     issueId: string,
   ) {
+    const enqueueCheck = await canEnqueueForAgent(agent.id);
+    if (!enqueueCheck.allowed) {
+      logger.info({ agentId: agent.id, runId: run.id, reason: enqueueCheck.reason }, "skipping missing_issue_comment retry — enqueue gated");
+      return null;
+    }
     const contextSnapshot = parseObject(run.contextSnapshot);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(contextSnapshot, null);
     const sessionBefore = await resolveSessionBeforeForWakeup(agent, taskKey);
@@ -3115,6 +3131,11 @@ export function heartbeatService(db: Db) {
     agent: typeof agents.$inferSelect,
     now: Date,
   ) {
+    const enqueueCheck = await canEnqueueForAgent(agent.id);
+    if (!enqueueCheck.allowed) {
+      logger.info({ agentId: agent.id, runId: run.id, reason: enqueueCheck.reason }, "skipping process_loss retry — enqueue gated");
+      return null;
+    }
     const contextSnapshot = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(contextSnapshot.issueId);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(contextSnapshot, null);
@@ -3223,6 +3244,11 @@ export function heartbeatService(db: Db) {
       wakeReason?: string;
     },
   ) {
+    const enqueueCheck = await canEnqueueForAgent(agent.id);
+    if (!enqueueCheck.allowed) {
+      logger.info({ agentId: agent.id, runId: run.id, reason: enqueueCheck.reason }, "skipping bounded retry schedule — enqueue gated");
+      return { outcome: "skipped_paused" as const };
+    }
     const now = opts?.now ?? new Date();
     const retryReason = opts?.retryReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON;
     const wakeReason = opts?.wakeReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON;
@@ -3376,6 +3402,11 @@ export function heartbeatService(db: Db) {
     const promotedRunIds: string[] = [];
 
     for (const dueRun of dueRuns) {
+      const enqueueCheck = await canEnqueueForAgent(dueRun.agentId);
+      if (!enqueueCheck.allowed) {
+        logger.info({ agentId: dueRun.agentId, runId: dueRun.id, reason: enqueueCheck.reason }, "skipping scheduled retry promotion — enqueue gated");
+        continue;
+      }
       const promoted = await db
         .update(heartbeatRuns)
         .set({
@@ -4794,9 +4825,14 @@ export function heartbeatService(db: Db) {
 
   async function startNextQueuedRunForAgent(agentId: string) {
     return withAgentStartLock(agentId, async () => {
+      const enqueueCheck = await canEnqueueForAgent(agentId);
+      if (!enqueueCheck.allowed) {
+        logger.info({ agentId, reason: enqueueCheck.reason }, "skipping queued run start — enqueue gated");
+        return [];
+      }
       const agent = await getAgent(agentId);
       if (!agent) return [];
-      if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
+      if (agent.status === "terminated" || agent.status === "pending_approval") {
         return [];
       }
       const policy = parseHeartbeatPolicy(agent);
@@ -6005,6 +6041,7 @@ export function heartbeatService(db: Db) {
   }
 
   async function releaseIssueExecutionAndPromote(run: typeof heartbeatRuns.$inferSelect) {
+    const enqueueCheck = await canEnqueueForAgent(run.agentId);
     const runContext = parseObject(run.contextSnapshot);
     const contextIssueId = readNonEmptyString(runContext.issueId);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(runContext, null);
@@ -6205,6 +6242,11 @@ export function heartbeatService(db: Db) {
         const promotedContinuationAttempt = readContinuationAttempt(
           promotedContextSnapshot.livenessContinuationAttempt,
         );
+        const deferredEnqueueCheck = await canEnqueueForAgent(deferredAgent.id);
+        if (!deferredEnqueueCheck.allowed) {
+          logger.info({ agentId: deferredAgent.id, deferredId: deferred.id, reason: deferredEnqueueCheck.reason }, "skipping deferred wake promotion — enqueue gated");
+          break;
+        }
         const now = new Date();
         const newRun = await tx
           .insert(heartbeatRuns)
@@ -6280,9 +6322,13 @@ export function heartbeatService(db: Db) {
       }
 
       const shouldBlockImmediately =
+        !enqueueCheck.allowed ||
         !recoveryAgentInvokable ||
         !recoveryAgent ||
         didAutomaticRecoveryFail(run, issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed");
+      if (!enqueueCheck.allowed) {
+        logger.info({ agentId: run.agentId, runId: run.id, reason: enqueueCheck.reason }, "skipping issue execution recovery — enqueue gated");
+      }
       if (shouldBlockImmediately) {
         const comment = buildImmediateExecutionPathRecoveryComment({
           status: issue.status as "todo" | "in_progress",

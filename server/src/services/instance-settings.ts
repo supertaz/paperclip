@@ -97,8 +97,20 @@ export function instanceSettingsService(db: Db) {
     throw new Error("Failed to initialize instance settings row");
   }
 
+  async function getSystemPauseState(): Promise<{ paused: boolean; pausedAt: string | null; pauseReason: string | null }> {
+    const row = await getOrCreateRow();
+    const raw = (row.general ?? {}) as Record<string, unknown>;
+    return {
+      paused: raw._systemPaused === true,
+      pausedAt: typeof raw._systemPausedAt === "string" ? raw._systemPausedAt : null,
+      pauseReason: typeof raw._systemPauseReason === "string" ? raw._systemPauseReason : null,
+    };
+  }
+
   return {
     get: async (): Promise<InstanceSettings> => toInstanceSettings(await getOrCreateRow()),
+
+    getSystemPauseState,
 
     getGeneral: async (): Promise<InstanceGeneralSettings> => {
       const row = await getOrCreateRow();
