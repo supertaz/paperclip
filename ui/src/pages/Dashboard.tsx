@@ -6,6 +6,7 @@ import { activityApi } from "../api/activity";
 import { accessApi } from "../api/access";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { projectsApi } from "../api/projects";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
 import { useCompany } from "../context/CompanyContext";
@@ -20,7 +21,7 @@ import { ActivityRow } from "../components/ActivityRow";
 import { Identity } from "../components/Identity";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
-import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
+import { Bot, CircleDot, Clock, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -47,6 +48,12 @@ export function Dashboard() {
     queryKey: queryKeys.agents.list(selectedCompanyId!),
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+  });
+
+  const { data: agentQueuedCounts } = useQuery({
+    queryKey: queryKeys.instance.agentQueuedCounts,
+    queryFn: () => instanceSettingsApi.getAgentQueuedCounts(),
+    refetchInterval: 15_000,
   });
 
   useEffect(() => {
@@ -152,6 +159,17 @@ export function Dashboard() {
     return map;
   }, [agents]);
 
+  const companyAgentIds = useMemo(
+    () => new Set((agents ?? []).map((a) => a.id)),
+    [agents],
+  );
+
+  const companyQueuedCount = useMemo(() => {
+    return (agentQueuedCounts ?? [])
+      .filter((e) => companyAgentIds.has(e.agentId))
+      .reduce((sum, e) => sum + e.queuedCount, 0);
+  }, [agentQueuedCounts, companyAgentIds]);
+
   const entityNameMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const i of issues ?? []) map.set(`issue:${i.id}`, i.identifier ?? i.id.slice(0, 8));
@@ -248,6 +266,16 @@ export function Dashboard() {
                   {data.agents.running} running{", "}
                   {data.agents.paused} paused{", "}
                   {data.agents.error} errors
+                </span>
+              }
+            />
+            <MetricCard
+              icon={Clock}
+              value={companyQueuedCount}
+              label="Queued Runs"
+              description={
+                <span>
+                  {(agents ?? []).filter((a) => a.status !== "terminated").length} agent{(agents ?? []).filter((a) => a.status !== "terminated").length !== 1 ? "s" : ""}
                 </span>
               }
             />
