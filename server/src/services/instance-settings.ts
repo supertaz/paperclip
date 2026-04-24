@@ -112,19 +112,29 @@ export function instanceSettingsService(db: Db) {
 
   async function setSystemPause(paused: boolean, reason?: string): Promise<void> {
     const row = await getOrCreateRow();
-    const raw = (row.general ?? {}) as Record<string, unknown>;
     const now = new Date();
-    const next: Record<string, unknown> = { ...raw };
     if (paused) {
-      next._systemPaused = true;
-      next._systemPausedAt = now.toISOString();
-      next._systemPauseReason = reason ?? null;
+      const patch = {
+        _systemPaused: true,
+        _systemPausedAt: now.toISOString(),
+        _systemPauseReason: reason ?? null,
+      };
+      await db
+        .update(instanceSettings)
+        .set({
+          general: sql`${instanceSettings.general} || ${JSON.stringify(patch)}::jsonb`,
+          updatedAt: now,
+        })
+        .where(eq(instanceSettings.id, row.id));
     } else {
-      delete next._systemPaused;
-      delete next._systemPausedAt;
-      delete next._systemPauseReason;
+      await db
+        .update(instanceSettings)
+        .set({
+          general: sql`${instanceSettings.general} - '_systemPaused' - '_systemPausedAt' - '_systemPauseReason'`,
+          updatedAt: now,
+        })
+        .where(eq(instanceSettings.id, row.id));
     }
-    await db.update(instanceSettings).set({ general: next, updatedAt: now }).where(eq(instanceSettings.id, row.id));
   }
 
   return {
