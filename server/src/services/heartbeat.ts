@@ -6170,6 +6170,7 @@ export function heartbeatService(db: Db) {
           assigneeAgentId: issues.assigneeAgentId,
           assigneeUserId: issues.assigneeUserId,
           executionRunId: issues.executionRunId,
+          originKind: issues.originKind,
         })
         .from(issues)
         .where(
@@ -6268,7 +6269,10 @@ export function heartbeatService(db: Db) {
         }
         const deferredCommentIds = extractWakeCommentIds(deferredContextSeed);
         const shouldReopenDeferredCommentWake =
-          deferredCommentIds.length > 0 && (issue.status === "done" || issue.status === "cancelled");
+          deferredCommentIds.length > 0 &&
+          (issue.status === "done" || issue.status === "cancelled") &&
+          !(deferred.requestedByActorType === "agent" && deferred.requestedByActorId === run.agentId) &&
+          issue.originKind !== "routine_execution";
         let reopenedActivity: LogActivityInput | null = null;
 
         if (shouldReopenDeferredCommentWake) {

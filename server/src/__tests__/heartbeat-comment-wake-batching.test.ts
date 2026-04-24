@@ -1198,6 +1198,310 @@ describe("heartbeat comment wake batching", () => {
       await gateway.close();
     }
   }, 120_000);
+  it("does not reopen a done issue when the deferred wake was enqueued by the same agent that just finished", async () => {
+    const gateway = await createControlledGatewayServer();
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    const heartbeat = heartbeatService(db);
+
+    try {
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix,
+        requireBoardApprovalForNewAgents: false,
+      });
+
+      await db.insert(agents).values({
+        id: agentId,
+        companyId,
+        name: "Self-Waker Agent",
+        role: "engineer",
+        status: "idle",
+        adapterType: "openclaw_gateway",
+        adapterConfig: {
+          url: gateway.url,
+          headers: { "x-openclaw-token": "gateway-token" },
+          payloadTemplate: { message: "wake now" },
+          waitTimeoutMs: 2_000,
+        },
+        runtimeConfig: {},
+        permissions: {},
+      });
+
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Self-requeue guard",
+        status: "todo",
+        priority: "medium",
+        assigneeAgentId: agentId,
+        issueNumber: 10,
+        identifier: `${issuePrefix}-10`,
+      });
+
+      const startComment = await db
+        .insert(issueComments)
+        .values({ companyId, issueId, authorUserId: "user-1", body: "Start" })
+        .returning()
+        .then((rows) => rows[0]);
+
+      const firstRun = await heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_commented",
+        payload: { issueId, commentId: startComment.id },
+        contextSnapshot: { issueId, taskId: issueId, commentId: startComment.id, wakeReason: "issue_commented" },
+        requestedByActorType: "user",
+        requestedByActorId: "user-1",
+      });
+
+      expect(firstRun).not.toBeNull();
+      await waitFor(async () => {
+        const run = await db
+          .select({ status: heartbeatRuns.status })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, firstRun!.id))
+          .then((rows) => rows[0] ?? null);
+        return run?.status === "running";
+      });
+
+      // The agent self-enqueues a deferred comment wake (same agentId as the running run)
+      const selfComment = await db
+        .insert(issueComments)
+        .values({ companyId, issueId, authorAgentId: agentId, body: "Self follow-up" })
+        .returning()
+        .then((rows) => rows[0]);
+
+      const selfRun = await heartbeat.wakeup(agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_commented",
+        payload: { issueId, commentId: selfComment.id },
+        contextSnapshot: { issueId, taskId: issueId, commentId: selfComment.id, wakeReason: "issue_commented" },
+        requestedByActorType: "agent",
+        requestedByActorId: agentId,
+      });
+      expect(selfRun).toBeNull();
+
+      await waitFor(async () => {
+        const deferred = await db
+          .select()
+          .from(agentWakeupRequests)
+          .where(
+            and(
+              eq(agentWakeupRequests.companyId, companyId),
+              eq(agentWakeupRequests.agentId, agentId),
+              eq(agentWakeupRequests.status, "deferred_issue_execution"),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+        return Boolean(deferred);
+      });
+
+      // Mark issue done before releasing the run
+      await db
+        .update(issues)
+        .set({ status: "done", completedAt: new Date(), executionRunId: null, executionAgentNameKey: null, executionLockedAt: null, updatedAt: new Date() })
+        .where(eq(issues.id, issueId));
+
+      gateway.releaseFirstWait();
+
+      // Wait for first run to finish
+      await waitFor(async () => {
+        const run = await db
+          .select({ status: heartbeatRuns.status })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, firstRun!.id))
+          .then((rows) => rows[0] ?? null);
+        return run?.status === "succeeded";
+      }, 90_000);
+
+      // Issue must remain done — same-agent deferred wake must NOT reopen it
+      const finalIssue = await db
+        .select({ status: issues.status })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+      expect(finalIssue?.status).toBe("done");
+
+      // Deferred wake must have been cancelled, not promoted
+      const deferrals = await db
+        .select()
+        .from(agentWakeupRequests)
+        .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, agentId)));
+      const promoted = deferrals.filter((d) => d.status === "queued");
+      expect(promoted).toHaveLength(0);
+    } finally {
+      gateway.releaseFirstWait();
+      await gateway.close();
+    }
+  }, 120_000);
+
+  it("does not reopen a done routine_execution issue even when a different agent has a deferred comment wake", async () => {
+    const gateway = await createControlledGatewayServer();
+    const companyId = randomUUID();
+    const routineAgentId = randomUUID();
+    const commentingAgentId = randomUUID();
+    const issueId = randomUUID();
+    const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    const heartbeat = heartbeatService(db);
+
+    try {
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix,
+        requireBoardApprovalForNewAgents: false,
+      });
+
+      await db.insert(agents).values([
+        {
+          id: routineAgentId,
+          companyId,
+          name: "Routine Agent",
+          role: "engineer",
+          status: "idle",
+          adapterType: "openclaw_gateway",
+          adapterConfig: {
+            url: gateway.url,
+            headers: { "x-openclaw-token": "gateway-token" },
+            payloadTemplate: { message: "wake now" },
+            waitTimeoutMs: 2_000,
+          },
+          runtimeConfig: {},
+          permissions: {},
+        },
+        {
+          id: commentingAgentId,
+          companyId,
+          name: "Commenting Agent",
+          role: "engineer",
+          status: "idle",
+          adapterType: "openclaw_gateway",
+          adapterConfig: {
+            url: gateway.url,
+            headers: { "x-openclaw-token": "gateway-token" },
+            payloadTemplate: { message: "wake now" },
+            waitTimeoutMs: 2_000,
+          },
+          runtimeConfig: {},
+          permissions: {},
+        },
+      ]);
+
+      // Issue spawned by a routine tick — must never be reopened by comment wakes
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Routine cron task",
+        status: "todo",
+        priority: "medium",
+        assigneeAgentId: routineAgentId,
+        issueNumber: 11,
+        identifier: `${issuePrefix}-11`,
+        originKind: "routine_execution",
+        originId: "routine-123",
+      });
+
+      const startComment = await db
+        .insert(issueComments)
+        .values({ companyId, issueId, authorUserId: "user-1", body: "Start routine" })
+        .returning()
+        .then((rows) => rows[0]);
+
+      const firstRun = await heartbeat.wakeup(routineAgentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_commented",
+        payload: { issueId, commentId: startComment.id },
+        contextSnapshot: { issueId, taskId: issueId, commentId: startComment.id, wakeReason: "issue_commented" },
+        requestedByActorType: "user",
+        requestedByActorId: "user-1",
+      });
+
+      expect(firstRun).not.toBeNull();
+      await waitFor(async () => {
+        const run = await db
+          .select({ status: heartbeatRuns.status })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, firstRun!.id))
+          .then((rows) => rows[0] ?? null);
+        return run?.status === "running";
+      });
+
+      // A different agent comments — deferred wake should still be blocked because originKind is routine_execution
+      const followUpComment = await db
+        .insert(issueComments)
+        .values({ companyId, issueId, authorAgentId: commentingAgentId, body: "Looks good from my side" })
+        .returning()
+        .then((rows) => rows[0]);
+
+      const deferredRun = await heartbeat.wakeup(commentingAgentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_commented",
+        payload: { issueId, commentId: followUpComment.id },
+        contextSnapshot: { issueId, taskId: issueId, commentId: followUpComment.id, wakeReason: "issue_commented" },
+        requestedByActorType: "agent",
+        requestedByActorId: commentingAgentId,
+      });
+      expect(deferredRun).toBeNull();
+
+      await waitFor(async () => {
+        const deferred = await db
+          .select()
+          .from(agentWakeupRequests)
+          .where(
+            and(
+              eq(agentWakeupRequests.companyId, companyId),
+              eq(agentWakeupRequests.agentId, commentingAgentId),
+              eq(agentWakeupRequests.status, "deferred_issue_execution"),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+        return Boolean(deferred);
+      });
+
+      // Mark issue done
+      await db
+        .update(issues)
+        .set({ status: "done", completedAt: new Date(), executionRunId: null, executionAgentNameKey: null, executionLockedAt: null, updatedAt: new Date() })
+        .where(eq(issues.id, issueId));
+
+      gateway.releaseFirstWait();
+
+      await waitFor(async () => {
+        const run = await db
+          .select({ status: heartbeatRuns.status })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, firstRun!.id))
+          .then((rows) => rows[0] ?? null);
+        return run?.status === "succeeded";
+      }, 90_000);
+
+      // Routine issue must remain done — no reopening regardless of who made the deferred wake
+      const finalIssue = await db
+        .select({ status: issues.status })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+      expect(finalIssue?.status).toBe("done");
+
+      const deferrals = await db
+        .select()
+        .from(agentWakeupRequests)
+        .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, commentingAgentId)));
+      const promoted = deferrals.filter((d) => d.status === "queued");
+      expect(promoted).toHaveLength(0);
+    } finally {
+      gateway.releaseFirstWait();
+      await gateway.close();
+    }
+  }, 120_000);
+
   it("treats the automatic run summary as fallback-only when the run already posted a comment", async () => {
     const gateway = await createControlledGatewayServer();
     const companyId = randomUUID();
