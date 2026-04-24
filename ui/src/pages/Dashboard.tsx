@@ -276,9 +276,10 @@ export function Dashboard() {
               icon={Clock}
               value={companyQueuedCount}
               label="Queued Runs"
+              to="/instance/settings/system-health"
               description={
                 <span>
-                  {activeAgentCount} agent{activeAgentCount !== 1 ? "s" : ""}
+                  {activeAgentCount} active agent{activeAgentCount !== 1 ? "s" : ""}
                 </span>
               }
             />
