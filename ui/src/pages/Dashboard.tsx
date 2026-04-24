@@ -54,6 +54,7 @@ export function Dashboard() {
     queryKey: queryKeys.instance.agentQueuedCounts,
     queryFn: () => instanceSettingsApi.getAgentQueuedCounts(),
     refetchInterval: 15_000,
+    enabled: !!selectedCompanyId,
   });
 
   useEffect(() => {
@@ -170,6 +171,8 @@ export function Dashboard() {
       .reduce((sum, e) => sum + e.queuedCount, 0);
   }, [agentQueuedCounts, companyAgentIds]);
 
+  const activeAgentCount = (agents ?? []).filter((a) => a.status !== "terminated").length;
+
   const entityNameMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const i of issues ?? []) map.set(`issue:${i.id}`, i.identifier ?? i.id.slice(0, 8));
@@ -275,7 +278,7 @@ export function Dashboard() {
               label="Queued Runs"
               description={
                 <span>
-                  {(agents ?? []).filter((a) => a.status !== "terminated").length} agent{(agents ?? []).filter((a) => a.status !== "terminated").length !== 1 ? "s" : ""}
+                  {activeAgentCount} agent{activeAgentCount !== 1 ? "s" : ""}
                 </span>
               }
             />
