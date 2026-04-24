@@ -1780,7 +1780,7 @@ export function issueRoutes(
     let resolvedActorIsAgent = actor.actorType === "agent";
     if (actor.actorType !== "agent" && actor.runId) {
       const run = await heartbeat.getRun(actor.runId);
-      if (run?.agentId) {
+      if (run?.agentId && run.companyId === existing.companyId) {
         resolvedActorAgentId = run.agentId;
         resolvedActorIsAgent = true;
       }
@@ -3133,7 +3133,7 @@ export function issueRoutes(
     let resolvedActorIsAgent = actor.actorType === "agent";
     if (actor.actorType !== "agent" && actor.runId) {
       const run = await heartbeat.getRun(actor.runId);
-      if (run?.agentId) {
+      if (run?.agentId && run.companyId === issue.companyId) {
         resolvedActorAgentId = run.agentId;
         resolvedActorIsAgent = true;
       }
