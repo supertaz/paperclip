@@ -6285,7 +6285,7 @@ export function heartbeatService(db: Db) {
         const deferredEnqueueCheck = await canEnqueueForAgent(deferredAgent.id);
         if (!deferredEnqueueCheck.allowed) {
           logger.info({ agentId: deferredAgent.id, deferredId: deferred.id, reason: deferredEnqueueCheck.reason }, "skipping deferred wake promotion — enqueue gated");
-          break;
+          continue;
         }
         const now = new Date();
         const newRun = await tx

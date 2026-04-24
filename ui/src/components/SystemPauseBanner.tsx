@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { OctagonX } from "lucide-react";
 import { instanceSettingsApi } from "../api/instanceSettings";
+import { accessApi } from "../api/access";
 import { queryKeys } from "../lib/queryKeys";
 
 function formatTimestamp(value: string | null): string | null {
@@ -12,11 +13,16 @@ function formatTimestamp(value: string | null): string | null {
 
 export function SystemPauseBanner() {
   const queryClient = useQueryClient();
+  const { data: boardAccess } = useQuery({
+    queryKey: queryKeys.access.currentBoardAccess,
+    queryFn: () => accessApi.getCurrentBoardAccess(),
+  });
   const { data } = useQuery({
     queryKey: queryKeys.instance.adminStatus,
     queryFn: () => instanceSettingsApi.getAdminStatus(),
     retry: false,
     refetchInterval: 30_000,
+    enabled: !!boardAccess?.isInstanceAdmin,
   });
 
   const unpause = useMutation({
@@ -26,7 +32,7 @@ export function SystemPauseBanner() {
     },
   });
 
-  if (!data?.paused) return null;
+  if (!boardAccess?.isInstanceAdmin || !data?.paused) return null;
 
   const since = formatTimestamp(data.pausedAt);
 
