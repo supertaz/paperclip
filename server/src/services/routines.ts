@@ -1231,11 +1231,23 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
           .set({ enabled: false, nextRunAt: null, updatedAt: new Date() })
           .where(eq(routineTriggers.routineId, id));
       } else if (wasArchived && isNowActive) {
-        // Unarchiving back to active: re-enable schedule triggers so they resume.
-        await db
-          .update(routineTriggers)
-          .set({ enabled: true, updatedAt: new Date() })
-          .where(and(eq(routineTriggers.routineId, id), eq(routineTriggers.kind, "schedule")));
+        // Unarchiving back to active: re-enable all triggers.
+        // Schedule triggers need nextRunAt recalculated — archiving nulled it out,
+        // and the scheduler filters on isNotNull(nextRunAt) so null = invisible forever.
+        const allTriggers = await db
+          .select()
+          .from(routineTriggers)
+          .where(eq(routineTriggers.routineId, id));
+        for (const t of allTriggers) {
+          const nextRunAt =
+            t.kind === "schedule" && t.cronExpression && t.timezone
+              ? nextCronTickInTimeZone(t.cronExpression, t.timezone, new Date())
+              : undefined;
+          await db
+            .update(routineTriggers)
+            .set({ enabled: true, ...(nextRunAt !== undefined ? { nextRunAt } : {}), updatedAt: new Date() })
+            .where(eq(routineTriggers.id, t.id));
+        }
       }
       return updated ?? null;
     },
