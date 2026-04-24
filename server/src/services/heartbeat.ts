@@ -6582,9 +6582,9 @@ export function heartbeatService(db: Db) {
       readNonEmptyString(enrichedContextSnapshot.wakeReason) === "issue_comment_mentioned";
 
     if (issueId && !bypassIssueExecutionLock) {
-      // Mention-triggered wakes can request input from another agent, but they must
-      // still respect the issue execution lock so a second agent cannot start on the
-      // same issue workspace while the assignee already has a live run.
+      // Non-mention wakes must respect the issue execution lock so a second agent
+      // cannot start on the same issue workspace while the assignee has a live run.
+      // Mention-triggered wakes bypass this block entirely via bypassIssueExecutionLock.
       const agentNameKey = normalizeAgentNameKey(agent.name);
 
       const outcome = await db.transaction(async (tx) => {
@@ -6928,36 +6928,46 @@ export function heartbeatService(db: Db) {
     // that run instead of spawning a follower. This stops the cascade where each
     // comment the agent posts generates a new wakeup that bypasses the same-scope
     // running-run coalesce gate via shouldQueueFollowupForCommentWake.
+    // The check and update run inside a transaction with FOR UPDATE so two concurrent
+    // wakeups carrying the same wakeCommentId cannot both fall through to enqueue.
     if (wakeCommentId) {
       const runWithSameComment = activeRuns.find((run) => {
         const ctx = parseObject(run.contextSnapshot);
         return readNonEmptyString(ctx.wakeCommentId) === wakeCommentId;
       });
       if (runWithSameComment) {
-        const mergedContextSnapshot = mergeCoalescedContextSnapshot(
-          runWithSameComment.contextSnapshot,
-          enrichedContextSnapshot,
-        );
-        await db
-          .update(heartbeatRuns)
-          .set({ contextSnapshot: mergedContextSnapshot, updatedAt: new Date() })
-          .where(eq(heartbeatRuns.id, runWithSameComment.id));
-        await db.insert(agentWakeupRequests).values({
-          companyId: agent.companyId,
-          agentId,
-          source,
-          triggerDetail,
-          reason,
-          payload,
-          status: "coalesced",
-          coalescedCount: 1,
-          requestedByActorType: opts.requestedByActorType ?? null,
-          requestedByActorId: opts.requestedByActorId ?? null,
-          idempotencyKey: opts.idempotencyKey ?? null,
-          runId: runWithSameComment.id,
-          finishedAt: new Date(),
+        const coalesced = await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`select id from heartbeat_runs where id = ${runWithSameComment.id} for update`,
+          );
+          const [current] = await tx.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runWithSameComment.id));
+          if (!current || !EXECUTION_PATH_HEARTBEAT_RUN_STATUSES.includes(current.status as typeof EXECUTION_PATH_HEARTBEAT_RUN_STATUSES[number])) return null;
+          const mergedContextSnapshot = mergeCoalescedContextSnapshot(
+            current.contextSnapshot,
+            enrichedContextSnapshot,
+          );
+          await tx
+            .update(heartbeatRuns)
+            .set({ contextSnapshot: mergedContextSnapshot, updatedAt: new Date() })
+            .where(eq(heartbeatRuns.id, current.id));
+          await tx.insert(agentWakeupRequests).values({
+            companyId: agent.companyId,
+            agentId,
+            source,
+            triggerDetail,
+            reason,
+            payload,
+            status: "coalesced",
+            coalescedCount: 1,
+            requestedByActorType: opts.requestedByActorType ?? null,
+            requestedByActorId: opts.requestedByActorId ?? null,
+            idempotencyKey: opts.idempotencyKey ?? null,
+            runId: current.id,
+            finishedAt: new Date(),
+          });
+          return current;
         });
-        return runWithSameComment;
+        if (coalesced) return coalesced;
       }
     }
 
@@ -7234,7 +7244,7 @@ export function heartbeatService(db: Db) {
           eq(heartbeatRuns.invocationSource, "timer"),
         ));
       for (const timerRun of queuedTimerRuns) {
-        await setRunStatus(timerRun.id, "cancelled", {
+        const cancelledTimerRun = await setRunStatus(timerRun.id, "cancelled", {
           finishedAt: new Date(),
           error: "Cancelled: user cancelled the active run",
           errorCode: "cancelled",
@@ -7243,6 +7253,14 @@ export function heartbeatService(db: Db) {
           finishedAt: new Date(),
           error: "Cancelled: user cancelled the active run",
         });
+        if (cancelledTimerRun) {
+          await appendRunEvent(cancelledTimerRun, 1, {
+            eventType: "lifecycle",
+            stream: "system",
+            level: "warn",
+            message: "run cancelled",
+          });
+        }
       }
     }
 
@@ -7619,7 +7637,8 @@ export function heartbeatService(db: Db) {
         // and the run would immediately hit 409 on every checkout attempt.
         // Pure-task agents (zero assigned issues) are unaffected: totalAssigned === 0
         // falls through to the normal enqueue path.
-        const agentNameKey = normalizeAgentNameKey(agent.name) ?? "";
+        const agentNameKey = normalizeAgentNameKey(agent.name);
+        if (!agentNameKey) continue;
         const issueAvailability = await countIssueAvailabilityForTimerAgent(agent.id, agent.companyId, agentNameKey);
         if (issueAvailability.totalAssigned > 0 && issueAvailability.available === 0) {
           logger.debug(
