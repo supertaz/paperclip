@@ -6996,9 +6996,11 @@ export function heartbeatService(db: Db) {
       });
 
       await startNextQueuedRunForAgent(agent.id);
-      void recordEnqueueAndCheckRunaway(agentId, agent.name).catch((err) =>
-        logger.error({ agentId, err }, "runaway detector error — auto-pause may not have fired"),
-      );
+      if (agent.status !== "paused") {
+        void recordEnqueueAndCheckRunaway(agentId, agent.name).catch((err) =>
+          logger.error({ agentId, err }, "runaway detector error — auto-pause may not have fired"),
+        );
+      }
       return newRun;
     }
 
@@ -7114,9 +7116,11 @@ export function heartbeatService(db: Db) {
     });
 
     await startNextQueuedRunForAgent(agent.id);
-    void recordEnqueueAndCheckRunaway(agentId, agent.name).catch((err) =>
-      logger.error({ agentId, err }, "runaway detector error — auto-pause may not have fired"),
-    );
+    if (agent.status !== "paused") {
+      void recordEnqueueAndCheckRunaway(agentId, agent.name).catch((err) =>
+        logger.error({ agentId, err }, "runaway detector error — auto-pause may not have fired"),
+      );
+    }
 
     return newRun;
   }
