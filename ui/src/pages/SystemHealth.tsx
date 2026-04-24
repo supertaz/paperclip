@@ -61,7 +61,7 @@ export function SystemHealth() {
   const clearAutoPause = useMutation({
     mutationFn: (agentId: string) => agentsApi.unpauseAuto(agentId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["system-health-all-agents"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.instance.allAgents });
     },
   });
 

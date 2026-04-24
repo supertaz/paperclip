@@ -21,10 +21,13 @@ function assertCanManageInstanceSettings(req: Request) {
   throw forbidden("Instance admin access required");
 }
 
-export function instanceSettingsRoutes(db: Db) {
+export function instanceSettingsRoutes(
+  db: Db,
+  schedulerHeartbeat?: ReturnType<typeof heartbeatService>,
+) {
   const router = Router();
   const svc = instanceSettingsService(db);
-  const heartbeat = heartbeatService(db);
+  const heartbeat = schedulerHeartbeat ?? heartbeatService(db);
 
   router.get("/instance/settings/general", async (req, res) => {
     // General settings (e.g. keyboardShortcuts) are readable by any

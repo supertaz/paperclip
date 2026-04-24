@@ -591,6 +591,7 @@ export async function startServer(): Promise<StartedServer> {
       databaseBackupInFlight = false;
     }
   };
+  const schedulerHeartbeat = config.heartbeatSchedulerEnabled ? heartbeatService(db as any) : undefined;
   const app = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
@@ -614,6 +615,7 @@ export async function startServer(): Promise<StartedServer> {
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
     resolveSession,
+    schedulerHeartbeat,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 
@@ -656,10 +658,9 @@ export async function startServer(): Promise<StartedServer> {
       logger.error({ err }, "startup reconciliation of persisted runtime services failed");
     });
   
-  if (config.heartbeatSchedulerEnabled) {
-    const heartbeat = heartbeatService(db as any);
+  if (config.heartbeatSchedulerEnabled && schedulerHeartbeat) {
+    const heartbeat = schedulerHeartbeat;
     const routines = routineService(db as any);
-    const schedulerSettings = instanceSettingsService(db as any);
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
@@ -724,7 +725,7 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "heartbeat timer tick failed");
         });
 
-      void schedulerSettings.getSystemPauseState()
+      void instanceSettingsService(db as any).getSystemPauseState()
         .then(({ paused }) => {
           if (paused) return { triggered: 0 };
           return routines.tickScheduledTriggers(new Date());
