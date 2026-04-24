@@ -1245,7 +1245,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
               : undefined;
           await db
             .update(routineTriggers)
-            .set({ enabled: true, ...(nextRunAt !== undefined ? { nextRunAt } : {}), updatedAt: new Date() })
+            .set({ enabled: true, ...(nextRunAt != null ? { nextRunAt } : {}), updatedAt: new Date() })
             .where(eq(routineTriggers.id, t.id));
         }
       }
