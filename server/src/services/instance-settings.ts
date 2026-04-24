@@ -12,7 +12,7 @@ import {
   type InstanceSettings,
   type PatchInstanceExperimentalSettings,
 } from "@paperclipai/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const DEFAULT_SINGLETON_KEY = "default";
 
@@ -146,13 +146,6 @@ export function instanceSettingsService(db: Db) {
 
     updateGeneral: async (patch: PatchInstanceGeneralSettings): Promise<InstanceSettings> => {
       const current = await getOrCreateRow();
-      const raw = (current.general ?? {}) as Record<string, unknown>;
-      // Preserve _system* pause keys — they are managed exclusively by the
-      // pause/unpause API and must never be wiped by a settings PATCH.
-      const systemKeys: Record<string, unknown> = {};
-      for (const key of Object.keys(raw)) {
-        if (key.startsWith("_system")) systemKeys[key] = raw[key];
-      }
       const currentNormalized = normalizeGeneralSettings(current.general);
       const nextGeneral = normalizeGeneralSettings({
         ...currentNormalized,
@@ -163,10 +156,13 @@ export function instanceSettingsService(db: Db) {
         ...(patch.runaway ? { runaway: { ...currentNormalized.runaway, ...patch.runaway } } : {}),
       });
       const now = new Date();
+      // Use a jsonb-level merge (col || $value) instead of a full column
+      // overwrite so _system* pause keys written by pause/unpause between
+      // our read and this write are never silently reverted.
       const [updated] = await db
         .update(instanceSettings)
         .set({
-          general: { ...nextGeneral, ...systemKeys },
+          general: sql`${instanceSettings.general} || ${JSON.stringify(nextGeneral)}::jsonb`,
           updatedAt: now,
         })
         .where(eq(instanceSettings.id, current.id))
