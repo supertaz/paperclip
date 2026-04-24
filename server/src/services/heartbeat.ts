@@ -1894,22 +1894,20 @@ export function heartbeatService(db: Db) {
     const slowCount = times.length;
 
     let tripReason: string | null = null;
-    if (fastCount > cfg.fastThresholdCount) {
+    if (fastCount >= cfg.fastThresholdCount) {
       tripReason = `auto-paused: ${fastCount} enqueues in last ${cfg.fastWindowSec}s (fast-trip threshold: ${cfg.fastThresholdCount})`;
-    } else if (slowCount > cfg.slowThresholdCount) {
+    } else if (slowCount >= cfg.slowThresholdCount) {
       tripReason = `auto-paused: ${slowCount} enqueues in last ${cfg.slowWindowSec}s (slow-trip threshold: ${cfg.slowThresholdCount})`;
     }
 
     if (tripReason) {
       logger.warn({ agentId, agentName, fastCount, slowCount }, "runaway detector triggered — auto-pausing agent");
       enqueueTimestamps.delete(agentId);
-      const [current] = await db.select({ runtimeConfig: agents.runtimeConfig }).from(agents).where(eq(agents.id, agentId));
-      if (current) {
-        await db.update(agents).set({
-          runtimeConfig: { ...(current.runtimeConfig ?? {}), autoPause: { paused: true, reason: tripReason, triggeredAt: new Date().toISOString() } },
-          updatedAt: new Date(),
-        }).where(eq(agents.id, agentId));
-      }
+      const autoPausePatch = { autoPause: { paused: true, reason: tripReason, triggeredAt: new Date().toISOString() } };
+      await db.update(agents).set({
+        runtimeConfig: sql`coalesce(${agents.runtimeConfig}, '{}'::jsonb) || ${JSON.stringify(autoPausePatch)}::jsonb`,
+        updatedAt: new Date(),
+      }).where(eq(agents.id, agentId));
       await cancelActiveForAgentInternal(agentId, tripReason);
     }
   }
