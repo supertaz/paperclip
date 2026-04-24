@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Clock, OctagonX, Play, Puzzle } from "lucide-react";
 import { Link } from "@/lib/router";
+import { type Agent, type PluginRecord } from "@paperclipai/shared";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { agentsApi } from "../api/agents";
 import { companiesApi } from "../api/companies";
@@ -66,7 +67,7 @@ export function SystemHealth() {
   });
 
   const status = statusQuery.data;
-  const autoPausedAgents = (allAgentsQuery.data ?? []).filter((agent) => {
+  const autoPausedAgents = (allAgentsQuery.data ?? []).filter((agent: Agent) => {
     const rc = asRecord(agent.runtimeConfig);
     return (rc?.autoPause as { paused?: boolean } | undefined)?.paused === true;
   });
@@ -172,7 +173,7 @@ export function SystemHealth() {
           <Card>
             <CardContent className="p-0">
               <div className="divide-y">
-                {autoPausedAgents.map((agent) => {
+                {autoPausedAgents.map((agent: Agent) => {
                   const rc = asRecord(agent.runtimeConfig);
                   const autoPause = rc?.autoPause as
                     | { paused?: boolean; reason?: string; triggeredAt?: string }
@@ -231,7 +232,7 @@ export function SystemHealth() {
               </div>
             ) : (
               <div className="divide-y">
-                {(pluginsQuery.data ?? []).map((plugin) => (
+                {(pluginsQuery.data ?? []).map((plugin: PluginRecord) => (
                   <div key={plugin.id} className="flex items-center gap-3 px-4 py-3 text-sm">
                     <Puzzle className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="flex-1 font-medium truncate">
