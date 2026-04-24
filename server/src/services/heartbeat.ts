@@ -6933,7 +6933,7 @@ export function heartbeatService(db: Db) {
     if (wakeCommentId) {
       const runWithSameComment = activeRuns.find((run) => {
         const ctx = parseObject(run.contextSnapshot);
-        return readNonEmptyString(ctx.wakeCommentId) === wakeCommentId;
+        return extractWakeCommentIds(ctx).includes(wakeCommentId) || readNonEmptyString(ctx.wakeCommentId) === wakeCommentId;
       });
       if (runWithSameComment) {
         const coalesced = await db.transaction(async (tx) => {
