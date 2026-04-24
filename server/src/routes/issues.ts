@@ -1813,8 +1813,8 @@ export function issueRoutes(
         shouldImplicitlyMoveCommentedIssueToTodoForAgent({
           issueStatus: existing.status,
           assigneeAgentId: requestedAssigneeAgentId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
+          actorType: resolvedActorIsAgent ? "agent" : actor.actorType,
+          actorId: resolvedActorAgentId ?? actor.actorId,
         }));
     const updateReferenceSummaryBefore = titleOrDescriptionChanged
       ? await issueReferencesSvc.listIssueReferenceSummary(existing.id)
@@ -2173,7 +2173,7 @@ export function issueRoutes(
         ?? await issueReferencesSvc.listIssueReferenceSummary(issue.id);
       comment = await svc.addComment(id, commentBody, {
         agentId: resolvedActorAgentId ?? undefined,
-        userId: !resolvedActorIsAgent ? actor.actorId : undefined,
+        userId: actor.actorType === "user" ? actor.actorId : undefined,
         runId: actor.runId,
       });
       await issueReferencesSvc.syncComment(comment.id);
@@ -3148,8 +3148,8 @@ export function issueRoutes(
       shouldImplicitlyMoveCommentedIssueToTodoForAgent({
         issueStatus: issue.status,
         assigneeAgentId: issue.assigneeAgentId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
+        actorType: resolvedActorIsAgent ? "agent" : actor.actorType,
+        actorId: resolvedActorAgentId ?? actor.actorId,
       });
     const hasUnresolvedFirstClassBlockers =
       isBlocked && effectiveMoveToTodoRequested
@@ -3218,7 +3218,7 @@ export function issueRoutes(
 
     const comment = await svc.addComment(id, req.body.body, {
       agentId: resolvedActorAgentId ?? undefined,
-      userId: !resolvedActorIsAgent ? actor.actorId : undefined,
+      userId: actor.actorType === "user" ? actor.actorId : undefined,
       runId: actor.runId,
     });
     await issueReferencesSvc.syncComment(comment.id);
