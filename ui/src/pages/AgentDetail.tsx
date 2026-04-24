@@ -11,6 +11,7 @@ import { companySkillsApi } from "../api/companySkills";
 import { budgetsApi } from "../api/budgets";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
+import { accessApi } from "../api/access";
 import { ApiError } from "../api/client";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { activityApi } from "../api/activity";
@@ -810,9 +811,16 @@ export function AgentDetail() {
     },
   });
 
+  const { data: boardAccess } = useQuery({
+    queryKey: queryKeys.access.currentBoardAccess,
+    queryFn: () => accessApi.getCurrentBoardAccess(),
+    retry: false,
+  });
+
   const { data: agentQueuedCountsData } = useQuery({
     queryKey: queryKeys.instance.agentQueuedCounts,
     queryFn: () => instanceSettingsApi.getAgentQueuedCounts(),
+    enabled: !!boardAccess?.isInstanceAdmin,
     refetchInterval: 15_000,
   });
 

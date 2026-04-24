@@ -9,6 +9,7 @@ import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
+import { accessApi } from "../api/access";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, agentRouteRef, agentUrl } from "../lib/utils";
@@ -45,9 +46,16 @@ export function SidebarAgents() {
     refetchInterval: 10_000,
   });
 
+  const { data: boardAccess } = useQuery({
+    queryKey: queryKeys.access.currentBoardAccess,
+    queryFn: () => accessApi.getCurrentBoardAccess(),
+    retry: false,
+  });
+
   const { data: agentQueuedCounts } = useQuery({
     queryKey: queryKeys.instance.agentQueuedCounts,
     queryFn: () => instanceSettingsApi.getAgentQueuedCounts(),
+    enabled: !!boardAccess?.isInstanceAdmin,
     refetchInterval: 15_000,
   });
 
