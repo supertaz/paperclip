@@ -6268,11 +6268,26 @@ export function heartbeatService(db: Db) {
           };
         }
         const deferredCommentIds = extractWakeCommentIds(deferredContextSeed);
-        const shouldReopenDeferredCommentWake =
+        const isBlockedDeferredCommentWake =
           deferredCommentIds.length > 0 &&
           (issue.status === "done" || issue.status === "cancelled") &&
-          !(deferred.requestedByActorType === "agent" && deferred.requestedByActorId === run.agentId) &&
-          issue.originKind !== "routine_execution";
+          ((deferred.requestedByActorType === "agent" && deferred.requestedByActorId === run.agentId) ||
+            issue.originKind === "routine_execution");
+        if (isBlockedDeferredCommentWake) {
+          await tx
+            .update(agentWakeupRequests)
+            .set({
+              status: "cancelled",
+              finishedAt: new Date(),
+              error: "Deferred wake suppressed: resurrection loop guard (same-agent or routine-execution issue)",
+              updatedAt: new Date(),
+            })
+            .where(eq(agentWakeupRequests.id, deferred.id));
+          continue;
+        }
+        const shouldReopenDeferredCommentWake =
+          deferredCommentIds.length > 0 &&
+          (issue.status === "done" || issue.status === "cancelled");
         let reopenedActivity: LogActivityInput | null = null;
 
         if (shouldReopenDeferredCommentWake) {

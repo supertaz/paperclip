@@ -1321,19 +1321,31 @@ describe("heartbeat comment wake batching", () => {
 
       // Issue must remain done — same-agent deferred wake must NOT reopen it
       const finalIssue = await db
-        .select({ status: issues.status })
+        .select({ status: issues.status, executionRunId: issues.executionRunId })
         .from(issues)
         .where(eq(issues.id, issueId))
         .then((rows) => rows[0] ?? null);
       expect(finalIssue?.status).toBe("done");
+      // executionRunId must not be stamped with a new run
+      expect(finalIssue?.executionRunId).toBeNull();
 
-      // Deferred wake must have been cancelled, not promoted
+      // No new heartbeatRun should have been inserted beyond the first
+      const allRuns = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.agentId, agentId));
+      expect(allRuns).toHaveLength(1);
+      expect(allRuns[0]?.id).toBe(firstRun!.id);
+
+      // Deferred wake must have been explicitly cancelled, not promoted to queued
       const deferrals = await db
         .select()
         .from(agentWakeupRequests)
         .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, agentId)));
-      const promoted = deferrals.filter((d) => d.status === "queued");
-      expect(promoted).toHaveLength(0);
+      const cancelled = deferrals.find((d) => d.status === "cancelled");
+      const queued = deferrals.filter((d) => d.status === "queued");
+      expect(cancelled).not.toBeUndefined();
+      expect(queued).toHaveLength(0);
     } finally {
       gateway.releaseFirstWait();
       await gateway.close();
@@ -1484,18 +1496,30 @@ describe("heartbeat comment wake batching", () => {
 
       // Routine issue must remain done — no reopening regardless of who made the deferred wake
       const finalIssue = await db
-        .select({ status: issues.status })
+        .select({ status: issues.status, executionRunId: issues.executionRunId })
         .from(issues)
         .where(eq(issues.id, issueId))
         .then((rows) => rows[0] ?? null);
       expect(finalIssue?.status).toBe("done");
+      // executionRunId must not be stamped with a new run
+      expect(finalIssue?.executionRunId).toBeNull();
 
+      // No new heartbeatRun should have been inserted for the commenting agent
+      const commentingAgentRuns = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.agentId, commentingAgentId));
+      expect(commentingAgentRuns).toHaveLength(0);
+
+      // Deferred wake must have been explicitly cancelled, not promoted to queued
       const deferrals = await db
         .select()
         .from(agentWakeupRequests)
         .where(and(eq(agentWakeupRequests.companyId, companyId), eq(agentWakeupRequests.agentId, commentingAgentId)));
-      const promoted = deferrals.filter((d) => d.status === "queued");
-      expect(promoted).toHaveLength(0);
+      const cancelled = deferrals.find((d) => d.status === "cancelled");
+      const queued = deferrals.filter((d) => d.status === "queued");
+      expect(cancelled).not.toBeUndefined();
+      expect(queued).toHaveLength(0);
     } finally {
       gateway.releaseFirstWait();
       await gateway.close();
