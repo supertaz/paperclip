@@ -37,7 +37,7 @@ export function SystemHealth() {
   });
 
   const allAgentsQuery = useQuery({
-    queryKey: ["system-health-all-agents"],
+    queryKey: queryKeys.instance.allAgents,
     queryFn: async () => {
       const companies = await companiesApi.list();
       const perCompany = await Promise.all(companies.map((c) => agentsApi.list(c.id)));

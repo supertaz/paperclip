@@ -344,7 +344,8 @@ export function InstanceGeneralSettings() {
               <h3 className="text-sm font-medium">Startup guard</h3>
               <p className="text-sm text-muted-foreground">
                 Pauses the system at boot when the queued-run backlog exceeds the threshold,
-                preventing an immediate re-flood after a crash recovery.
+                preventing an immediate re-flood after a crash recovery. This check runs once
+                at process start — it is not a continuous guard.
               </p>
             </div>
             <ToggleSwitch

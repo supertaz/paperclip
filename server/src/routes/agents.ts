@@ -2367,6 +2367,10 @@ export function agentRoutes(db: Db) {
       .where(eq(agentsTable.id, id))
       .returning();
 
+    // Clear stale runaway timestamps so the first post-unpause enqueue doesn't
+    // immediately re-trip the detector due to pre-pause activity.
+    heartbeat.clearAgentEnqueueTimestamps(id);
+
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: agent.companyId,

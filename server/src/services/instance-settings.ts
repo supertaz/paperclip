@@ -153,9 +153,14 @@ export function instanceSettingsService(db: Db) {
       for (const key of Object.keys(raw)) {
         if (key.startsWith("_system")) systemKeys[key] = raw[key];
       }
+      const currentNormalized = normalizeGeneralSettings(current.general);
       const nextGeneral = normalizeGeneralSettings({
-        ...normalizeGeneralSettings(current.general),
+        ...currentNormalized,
         ...patch,
+        // Deep-merge runaway sub-object so a partial PATCH (allowed by the
+        // schema's .partial()) doesn't silently reset unspecified thresholds
+        // to defaults — it preserves the current stored values instead.
+        ...(patch.runaway ? { runaway: { ...currentNormalized.runaway, ...patch.runaway } } : {}),
       });
       const now = new Date();
       const [updated] = await db

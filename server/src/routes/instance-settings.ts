@@ -151,6 +151,12 @@ export function instanceSettingsRoutes(db: Db) {
   router.post("/admin/unpause", async (req, res) => {
     assertCanManageInstanceSettings(req);
     await svc.unpause();
+    // Clear all in-memory runaway timestamps so agents that had near-runaway
+    // activity before the pause don't immediately re-trip the detector on their
+    // first post-unpause enqueue. Queued runs are picked up by the next natural
+    // scheduler tick — no explicit promotion call needed.
+    const allAgentIds = await db.select({ id: agents.id }).from(agents);
+    for (const { id } of allAgentIds) heartbeat.clearAgentEnqueueTimestamps(id);
     const state = await svc.getSystemPauseState();
     const actor = getActorInfo(req);
     logger.info({ actor }, "system unpaused by operator");

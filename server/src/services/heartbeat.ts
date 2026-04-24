@@ -7646,6 +7646,8 @@ export function heartbeatService(db: Db) {
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 
+    clearAgentEnqueueTimestamps: (agentId: string) => { enqueueTimestamps.delete(agentId); },
+
     cancelAllActiveRuns: async (reason: string) => {
       const activeAgentIds = await db
         .selectDistinct({ agentId: heartbeatRuns.agentId })
