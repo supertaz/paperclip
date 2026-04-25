@@ -6161,7 +6161,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           and(
             eq(agentWakeupRequests.agentId, agentId),
             eq(agentWakeupRequests.idempotencyKey, opts.idempotencyKey),
-            inArray(agentWakeupRequests.status, ["queued", "deferred_issue_execution", "completed"]),
+            inArray(agentWakeupRequests.status, ["queued", "deferred_issue_execution"]),
           ),
         )
         .limit(1)
