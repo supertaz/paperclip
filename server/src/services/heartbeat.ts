@@ -107,7 +107,7 @@ import {
   readContinuationAttempt,
 } from "./recovery/index.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-guard.js";
-import { recoveryService } from "./recovery/service.js";
+import { recoveryService, didAutomaticRecoveryExhaust } from "./recovery/service.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
@@ -992,25 +992,6 @@ function summarizeRunFailureForIssueComment(
   if (errorCode) return ` Latest retry failure: \`${errorCode}\`.`;
   if (summary) return ` Latest retry failure: ${summary}.`;
   return null;
-}
-
-function didAutomaticRecoveryExhaust(
-  latestRun: Pick<typeof heartbeatRuns.$inferSelect, "status" | "contextSnapshot"> | null,
-  expectedRetryReason: "assignment_recovery" | "issue_continuation_needed",
-) {
-  if (!latestRun) return false;
-
-  const latestContext = parseObject(latestRun.contextSnapshot);
-  const latestRetryReason = readNonEmptyString(latestContext.retryReason);
-  // A succeeded recovery run is also considered exhausted: call sites verify there is no
-  // active execution path before reaching this check, so a run that exited successfully
-  // without re-establishing one left the issue stranded and should trigger escalation.
-  return (
-    latestRetryReason === expectedRetryReason &&
-    HEARTBEAT_RUN_TERMINAL_STATUSES.includes(
-      latestRun.status as (typeof HEARTBEAT_RUN_TERMINAL_STATUSES)[number],
-    )
-  );
 }
 
 function normalizeLedgerBillingType(value: unknown): BillingType {

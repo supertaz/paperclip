@@ -112,7 +112,7 @@ function summarizeRunFailureForIssueComment(run: LatestIssueRun) {
   return null;
 }
 
-function didAutomaticRecoveryExhaust(
+export function didAutomaticRecoveryExhaust(
   latestRun: LatestIssueRun,
   expectedRetryReason: "assignment_recovery" | "issue_continuation_needed",
 ) {
