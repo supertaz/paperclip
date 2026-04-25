@@ -994,7 +994,7 @@ function summarizeRunFailureForIssueComment(
   return null;
 }
 
-function didAutomaticRecoveryFail(
+function didAutomaticRecoveryExhaust(
   latestRun: Pick<typeof heartbeatRuns.$inferSelect, "status" | "contextSnapshot"> | null,
   expectedRetryReason: "assignment_recovery" | "issue_continuation_needed",
 ) {
@@ -1002,10 +1002,13 @@ function didAutomaticRecoveryFail(
 
   const latestContext = parseObject(latestRun.contextSnapshot);
   const latestRetryReason = readNonEmptyString(latestContext.retryReason);
+  // A succeeded recovery run is also considered exhausted: call sites verify there is no
+  // active execution path before reaching this check, so a run that exited successfully
+  // without re-establishing one left the issue stranded and should trigger escalation.
   return (
     latestRetryReason === expectedRetryReason &&
-    UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES.includes(
-      latestRun.status as (typeof UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES)[number],
+    HEARTBEAT_RUN_TERMINAL_STATUSES.includes(
+      latestRun.status as (typeof HEARTBEAT_RUN_TERMINAL_STATUSES)[number],
     )
   );
 }
@@ -6031,7 +6034,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const shouldBlockImmediately =
         !recoveryAgentInvokable ||
         !recoveryAgent ||
-        didAutomaticRecoveryFail(run, issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed");
+        didAutomaticRecoveryExhaust(run, issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed");
       if (shouldBlockImmediately) {
         const comment = buildImmediateExecutionPathRecoveryComment({
           status: issue.status as "todo" | "in_progress",
