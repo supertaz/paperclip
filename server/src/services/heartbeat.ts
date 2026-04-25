@@ -3733,11 +3733,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
     if (!agent) {
-      await cancelRunInternal(run.id, "Cancelled because the agent no longer exists");
+      await cancelRunInternal(run.id, "Cancelled because the agent no longer exists", "system");
       return null;
     }
     if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
-      await cancelRunInternal(run.id, "Cancelled because the agent is not invokable");
+      await cancelRunInternal(run.id, "Cancelled because the agent is not invokable", "system");
       return null;
     }
 
@@ -3747,7 +3747,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       projectId: readNonEmptyString(context.projectId),
     });
     if (budgetBlock) {
-      await cancelRunInternal(run.id, budgetBlock.reason);
+      await cancelRunInternal(run.id, budgetBlock.reason, "budget");
       return null;
     }
 
@@ -3763,7 +3763,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         contextSnapshot: context,
       });
       if (activePauseHold && !treeHoldInteractionWake) {
-        await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold");
+        await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold", "system");
         await logActivity(db, {
           companyId: run.companyId,
           actorType: "system",
@@ -6940,7 +6940,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
+  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane", cancelSource?: string) {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
@@ -6964,6 +6964,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       finishedAt: new Date(),
       error: reason,
       errorCode: "cancelled",
+      ...(cancelSource ? { cancelSource } : {}),
       ...(agent ? {
         resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
           resultJson: parseObject(run.resultJson),
@@ -6994,7 +6995,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return cancelled;
   }
 
-  async function cancelActiveForAgentInternal(agentId: string, reason = "Cancelled due to agent pause") {
+  async function cancelActiveForAgentInternal(agentId: string, reason = "Cancelled due to agent pause", cancelSource?: string) {
     const agent = await getAgent(agentId);
     const runs = await db
       .select()
@@ -7006,6 +7007,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         finishedAt: new Date(),
         error: reason,
         errorCode: "cancelled",
+        ...(cancelSource ? { cancelSource } : {}),
         ...(agent ? {
           resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
             resultJson: parseObject(run.resultJson),
@@ -7042,7 +7044,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
   async function cancelBudgetScopeWork(scope: BudgetEnforcementScope) {
     if (scope.scopeType === "agent") {
-      await cancelActiveForAgentInternal(scope.scopeId, "Cancelled due to budget pause");
+      await cancelActiveForAgentInternal(scope.scopeId, "Cancelled due to budget pause", "budget");
       await cancelPendingWakeupsForBudgetScope(scope);
       return;
     }
@@ -7062,7 +7064,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         : await listProjectScopedRunIds(scope.companyId, scope.scopeId);
 
     for (const runId of runIds) {
-      await cancelRunInternal(runId, "Cancelled due to budget pause");
+      await cancelRunInternal(runId, "Cancelled due to budget pause", "budget");
     }
 
     await cancelPendingWakeupsForBudgetScope(scope);
@@ -7362,9 +7364,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return { checked, enqueued, skipped };
     },
 
-    cancelRun: (runId: string) => cancelRunInternal(runId),
+    cancelRun: (runId: string, cancelSource?: string) => cancelRunInternal(runId, undefined, cancelSource),
 
-    cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
+    cancelActiveForAgent: (agentId: string, cancelSource?: string) => cancelActiveForAgentInternal(agentId, undefined, cancelSource),
 
     cancelBudgetScopeWork,
 

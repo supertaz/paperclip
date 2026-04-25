@@ -2197,7 +2197,7 @@ export function agentRoutes(
       return;
     }
 
-    await heartbeat.cancelActiveForAgent(id);
+    await heartbeat.cancelActiveForAgent(id, "user_initiated");
 
     await logActivity(db, {
       companyId: agent.companyId,
@@ -2282,7 +2282,7 @@ export function agentRoutes(
       return;
     }
 
-    await heartbeat.cancelActiveForAgent(id);
+    await heartbeat.cancelActiveForAgent(id, "user_initiated");
 
     await logActivity(db, {
       companyId: agent.companyId,
@@ -2638,7 +2638,7 @@ export function agentRoutes(
     if (existing) {
       assertCompanyAccess(req, existing.companyId);
     }
-    const run = await heartbeat.cancelRun(runId);
+    const run = await heartbeat.cancelRun(runId, "user_initiated");
 
     if (run) {
       await logActivity(db, {
