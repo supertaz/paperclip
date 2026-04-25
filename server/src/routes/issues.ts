@@ -2173,7 +2173,7 @@ export function issueRoutes(
         ?? await issueReferencesSvc.listIssueReferenceSummary(issue.id);
       comment = await svc.addComment(id, commentBody, {
         agentId: resolvedActorAgentId ?? undefined,
-        userId: actor.actorType === "user" ? actor.actorId : undefined,
+        userId: resolvedActorIsAgent ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
         runId: actor.runId,
       });
       await issueReferencesSvc.syncComment(comment.id);
@@ -3218,7 +3218,7 @@ export function issueRoutes(
 
     const comment = await svc.addComment(id, req.body.body, {
       agentId: resolvedActorAgentId ?? undefined,
-      userId: actor.actorType === "user" ? actor.actorId : undefined,
+      userId: resolvedActorIsAgent ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
       runId: actor.runId,
     });
     await issueReferencesSvc.syncComment(comment.id);
