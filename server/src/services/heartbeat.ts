@@ -152,6 +152,7 @@ const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_r
 const CANCELLABLE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
+type CancelSource = "user_initiated" | "system" | "budget";
 export {
   ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS,
   ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS,
@@ -6940,7 +6941,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane", cancelSource?: string) {
+  async function cancelRunInternal(runId: string, reason?: string, cancelSource?: CancelSource) {
+    const resolvedReason = reason ?? (cancelSource === "user_initiated" ? "Cancelled by user" : "Cancelled by control plane");
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
@@ -6962,21 +6964,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const cancelled = await setRunStatus(run.id, "cancelled", {
       finishedAt: new Date(),
-      error: reason,
+      error: resolvedReason,
       errorCode: "cancelled",
       ...(cancelSource ? { cancelSource } : {}),
       ...(agent ? {
         resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
           resultJson: parseObject(run.resultJson),
           errorCode: "cancelled",
-          errorMessage: reason,
+          errorMessage: resolvedReason,
         }),
       } : {}),
     });
 
     await setWakeupStatus(run.wakeupRequestId, "cancelled", {
       finishedAt: new Date(),
-      error: reason,
+      error: resolvedReason,
     });
 
     if (cancelled) {
@@ -6995,7 +6997,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return cancelled;
   }
 
-  async function cancelActiveForAgentInternal(agentId: string, reason = "Cancelled due to agent pause", cancelSource?: string) {
+  async function cancelActiveForAgentInternal(agentId: string, reason?: string, cancelSource?: CancelSource) {
+    const resolvedReason = reason ?? (cancelSource === "user_initiated" ? "Cancelled by user" : "Cancelled due to agent pause");
     const agent = await getAgent(agentId);
     const runs = await db
       .select()
@@ -7005,21 +7008,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     for (const run of runs) {
       await setRunStatus(run.id, "cancelled", {
         finishedAt: new Date(),
-        error: reason,
+        error: resolvedReason,
         errorCode: "cancelled",
         ...(cancelSource ? { cancelSource } : {}),
         ...(agent ? {
           resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
             resultJson: parseObject(run.resultJson),
             errorCode: "cancelled",
-            errorMessage: reason,
+            errorMessage: resolvedReason,
           }),
         } : {}),
       });
 
       await setWakeupStatus(run.wakeupRequestId, "cancelled", {
         finishedAt: new Date(),
-        error: reason,
+        error: resolvedReason,
       });
 
       const running = runningProcesses.get(run.id);
@@ -7364,9 +7367,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return { checked, enqueued, skipped };
     },
 
-    cancelRun: (runId: string, cancelSource?: string) => cancelRunInternal(runId, undefined, cancelSource),
+    cancelRun: (runId: string, cancelSource?: CancelSource) => cancelRunInternal(runId, undefined, cancelSource),
 
-    cancelActiveForAgent: (agentId: string, cancelSource?: string) => cancelActiveForAgentInternal(agentId, undefined, cancelSource),
+    cancelActiveForAgent: (agentId: string, cancelSource?: CancelSource) => cancelActiveForAgentInternal(agentId, undefined, cancelSource),
 
     cancelBudgetScopeWork,
 
