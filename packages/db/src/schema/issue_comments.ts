@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { agents } from "./agents.js";
@@ -33,6 +34,6 @@ export const issueComments = pgTable(
       table.createdAt,
     ),
     bodySearchIdx: index("issue_comments_body_search_idx").using("gin", table.body.op("gin_trgm_ops")),
-    idempotencyKeyIdx: uniqueIndex("issue_comments_idempotency_key_uq").on(table.idempotencyKey),
+    idempotencyKeyIdx: uniqueIndex("issue_comments_idempotency_key_uq").on(table.idempotencyKey).where(sql`"idempotency_key" IS NOT NULL`),
   }),
 );

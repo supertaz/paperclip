@@ -3180,9 +3180,10 @@ export function issueService(db: Db) {
       const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
 
       // Deduplicate agent-authored comments: if the same run posts the same body
-      // within 60 seconds, return the existing comment instead of inserting a new one.
-      // The unique partial index on idempotency_key makes this atomic — concurrent
-      // duplicate inserts are collapsed at the DB level via ON CONFLICT DO NOTHING.
+      // at any point during the run's lifetime, return the existing comment instead
+      // of inserting a new one. The unique partial index on idempotency_key makes
+      // this atomic — concurrent duplicate inserts are collapsed at the DB level
+      // via ON CONFLICT DO NOTHING.
       const idempotencyKey = actor.runId
         ? createHash("sha256").update(`${actor.runId}:${redactedBody}`).digest("hex")
         : null;
@@ -3208,6 +3209,10 @@ export function issueService(db: Db) {
           .from(issueComments)
           .where(eq(issueComments.idempotencyKey, idempotencyKey))
           .limit(1);
+
+      if (!comment) {
+        throw new Error("Failed to insert or retrieve deduplicated comment");
+      }
 
       // Update issue's updatedAt so comment activity is reflected in recency sorting
       await db
