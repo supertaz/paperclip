@@ -36,6 +36,8 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js"
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 const ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_MIN_STALE_MS = 24 * 60 * 60 * 1000;
+const ISSUE_CONTINUATION_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ISSUE_CONTINUATION_DAILY_CAP = 24;
 export const ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS = 60 * 60 * 1000;
 export const ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS = 4 * 60 * 60 * 1000;
 export const ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS = 30 * 60 * 1000;
@@ -87,6 +89,28 @@ export type RunOutputSilenceSummary = {
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+async function countDailyContinuationRuns(
+  db: Db,
+  companyId: string,
+  issueId: string,
+  since: Date,
+): Promise<number> {
+  const windowStart = new Date(Date.now() - ISSUE_CONTINUATION_DAILY_WINDOW_MS);
+  const effectiveSince = windowStart > since ? windowStart : since;
+  const rows = await db
+    .select({ id: heartbeatRuns.id })
+    .from(heartbeatRuns)
+    .where(
+      and(
+        eq(heartbeatRuns.companyId, companyId),
+        sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+        sql`${heartbeatRuns.contextSnapshot} ->> 'retryReason' = 'issue_continuation_needed'`,
+        gt(heartbeatRuns.createdAt, effectiveSince),
+      ),
+    );
+  return rows.length;
 }
 
 function summarizeRunFailureForIssueComment(run: LatestIssueRun) {
@@ -1420,6 +1444,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       continuationRequeued: 0,
       orphanBlockersAssigned: 0,
       escalated: 0,
+      dailyCapTripped: 0,
       skipped: 0,
       issueIds: [] as string[],
     };
@@ -1507,6 +1532,39 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             "Moving it to `blocked` so it is visible for intervention.",
         });
         if (updated) {
+          result.escalated += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
+
+      const dailyCount = await countDailyContinuationRuns(db, issue.companyId, issue.id, issue.updatedAt);
+      if (dailyCount >= ISSUE_CONTINUATION_DAILY_CAP) {
+        const updated = await escalateStrandedAssignedIssue({
+          issue,
+          previousStatus: "in_progress",
+          latestRun,
+          comment:
+            `Paperclip queued ${dailyCount} continuation runs for this issue in the last 24 hours without resolving it. ` +
+            "Moving it to `blocked` so it is visible for intervention.",
+        });
+        if (latestRun) {
+          await db.insert(heartbeatRunWatchdogDecisions).values({
+            companyId: issue.companyId,
+            runId: latestRun.id,
+            evaluationIssueId: issue.id,
+            decision: "rate_limited",
+            snoozedUntil: null,
+            reason: `Daily continuation cap of ${ISSUE_CONTINUATION_DAILY_CAP} reached (${dailyCount} runs in 24h).`,
+            createdByAgentId: null,
+            createdByUserId: null,
+            createdByRunId: null,
+          });
+        }
+        if (updated) {
+          result.dailyCapTripped += 1;
           result.escalated += 1;
           result.issueIds.push(issue.id);
         } else {
