@@ -63,6 +63,7 @@ export function ActivityRow({ event, agentMap, userProfileMap, entityNameMap, en
             <span
               className="inline-flex gap-1 items-center text-muted-foreground align-middle"
               title={systemSubsystem ? `System — ${systemSubsystem}` : "System"}
+              aria-label={systemSubsystem ? `System — ${systemSubsystem}` : "System"}
             >
               <Cpu className="size-3.5 shrink-0" aria-hidden />
               <span className="text-sm">System</span>
