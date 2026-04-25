@@ -74,7 +74,10 @@ describeEmbeddedPostgres("continuation cycle cap", () => {
     await tempDb?.cleanup();
   });
 
-  async function seedStrandedIssueWithRuns(runCount: number) {
+  const ISSUE_CREATED_AT = new Date("2026-04-25T09:00:00.000Z");
+  const RUNS_BASE_TIME = new Date("2026-04-25T10:00:00.000Z");
+
+  async function seedStrandedIssueWithRuns(runCount: number, issueUpdatedAt = ISSUE_CREATED_AT) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issueId = randomUUID();
@@ -106,11 +109,12 @@ describeEmbeddedPostgres("continuation cycle cap", () => {
       assigneeAgentId: agentId,
       issueNumber: 1,
       identifier: `${issuePrefix}-1`,
+      createdAt: ISSUE_CREATED_AT,
+      updatedAt: issueUpdatedAt,
     });
 
-    const baseTime = new Date("2026-04-25T10:00:00.000Z");
     for (let i = 0; i < runCount; i++) {
-      const createdAt = new Date(baseTime.getTime() + i * 60_000);
+      const createdAt = new Date(RUNS_BASE_TIME.getTime() + i * 60_000);
       await db.insert(heartbeatRuns).values({
         id: randomUUID(),
         companyId,
@@ -177,5 +181,22 @@ describeEmbeddedPostgres("continuation cycle cap", () => {
       expect.anything(),
       expect.objectContaining({ reason: "issue_continuation_needed" }),
     );
+  });
+
+  it("re-queues after operator manually unblocks without immediately triggering a new run", async () => {
+    // The 3 continuation runs predate the operator's manual unblock (issueUpdatedAt is after all runs).
+    // The cap must not fire on runs that predate the last status change.
+    const operatorUnblockedAt = new Date(RUNS_BASE_TIME.getTime() + 10 * 60_000);
+    const { issueId } = await seedStrandedIssueWithRuns(3, operatorUnblockedAt);
+    const enqueueWakeup = vi.fn().mockResolvedValue({ id: randomUUID() });
+    const recovery = recoveryService(db, { enqueueWakeup });
+
+    const result = await recovery.reconcileStrandedAssignedIssues();
+
+    expect(result.continuationRequeued).toBe(1);
+    expect(result.escalated).toBe(0);
+
+    const [updated] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(updated?.status).toBe("in_progress");
   });
 });

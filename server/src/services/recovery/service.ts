@@ -33,6 +33,7 @@ import {
 } from "./issue-graph-liveness.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
 
+const CONTINUATION_CYCLE_CAP = 3;
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 const ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_MIN_STALE_MS = 24 * 60 * 60 * 1000;
@@ -333,9 +334,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return Boolean(run || deferredWake);
   }
 
-  const CONTINUATION_CYCLE_CAP = 3;
-
-  async function hasExhaustedConsecutiveContinuationCycles(companyId: string, issueId: string) {
+  async function hasExhaustedConsecutiveContinuationCycles(companyId: string, issueId: string, since: Date) {
     const recentRuns = await db
       .select({
         status: heartbeatRuns.status,
@@ -346,6 +345,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         and(
           eq(heartbeatRuns.companyId, companyId),
           sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+          gt(heartbeatRuns.createdAt, since),
         ),
       )
       .orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id))
@@ -1539,7 +1539,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
 
-      if (await hasExhaustedConsecutiveContinuationCycles(issue.companyId, issue.id)) {
+      if (await hasExhaustedConsecutiveContinuationCycles(issue.companyId, issue.id, issue.updatedAt)) {
         const updated = await escalateStrandedAssignedIssue({
           issue,
           previousStatus: "in_progress",
