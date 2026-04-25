@@ -33,6 +33,8 @@ import {
 } from "./issue-graph-liveness.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
 
+const ISSUE_RECOVERY_RATE_WINDOW_MS = 5 * 60 * 1000;
+const ISSUE_RECOVERY_RATE_CAP = 5;
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 const ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_MIN_STALE_MS = 24 * 60 * 60 * 1000;
@@ -331,6 +333,74 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     ]);
 
     return Boolean(run || deferredWake);
+  }
+
+  async function countIssueRecoveryEnqueuesInWindow(
+    companyId: string,
+    agentId: string,
+    issueId: string,
+    windowMs: number,
+  ) {
+    const since = new Date(Date.now() - windowMs);
+    const rows = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          eq(heartbeatRuns.agentId, agentId),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+          gt(heartbeatRuns.createdAt, since),
+        ),
+      );
+    return rows.length;
+  }
+
+  async function tripIssueRecoveryRateLimit(input: {
+    issue: typeof issues.$inferSelect;
+    agentId: string;
+    latestRun: LatestIssueRun;
+    enqueueCount: number;
+  }) {
+    const windowMinutes = ISSUE_RECOVERY_RATE_WINDOW_MS / 60_000;
+    const comment =
+      `Paperclip detected a recovery loop: ${input.enqueueCount} recovery enqueues for this ` +
+      `issue in the last ${windowMinutes} minutes. ` +
+      "Moving the issue to `blocked` and pausing the agent to stop the loop.";
+    const [escalated, paused] = await Promise.all([
+      escalateStrandedAssignedIssue({
+        issue: input.issue,
+        previousStatus: input.issue.status as "todo" | "in_progress",
+        latestRun: input.latestRun,
+        comment,
+      }),
+      db
+        .update(agents)
+        .set({
+          status: "paused",
+          pauseReason: comment,
+          pausedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(agents.id, input.agentId),
+            notInArray(agents.status, ["paused", "terminated"]),
+          ),
+        )
+        .returning()
+        .then((rows) => rows[0] ?? null),
+    ]);
+    if (input.latestRun) {
+      await db.insert(heartbeatRunWatchdogDecisions).values({
+        companyId: input.issue.companyId,
+        runId: input.latestRun.id,
+        evaluationIssueId: input.issue.id,
+        decision: "rate_limited",
+        reason: comment,
+      });
+    }
+    return { escalated: Boolean(escalated), paused: Boolean(paused) };
   }
 
   async function enqueueStrandedIssueRecovery(input: {
@@ -1420,6 +1490,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       continuationRequeued: 0,
       orphanBlockersAssigned: 0,
       escalated: 0,
+      rateLimitTripped: 0,
       skipped: 0,
       issueIds: [] as string[],
     };
@@ -1474,6 +1545,28 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           continue;
         }
 
+        const assignmentEnqueueCount = await countIssueRecoveryEnqueuesInWindow(
+          issue.companyId,
+          agentId,
+          issue.id,
+          ISSUE_RECOVERY_RATE_WINDOW_MS,
+        );
+        if (assignmentEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
+          const { escalated: didEscalate } = await tripIssueRecoveryRateLimit({
+            issue,
+            agentId,
+            latestRun,
+            enqueueCount: assignmentEnqueueCount,
+          });
+          if (didEscalate) {
+            result.rateLimitTripped += 1;
+            result.issueIds.push(issue.id);
+          } else {
+            result.skipped += 1;
+          }
+          continue;
+        }
+
         const queued = await enqueueStrandedIssueRecovery({
           issueId: issue.id,
           agentId,
@@ -1508,6 +1601,28 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         });
         if (updated) {
           result.escalated += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
+
+      const continuationEnqueueCount = await countIssueRecoveryEnqueuesInWindow(
+        issue.companyId,
+        agentId,
+        issue.id,
+        ISSUE_RECOVERY_RATE_WINDOW_MS,
+      );
+      if (continuationEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
+        const { escalated: didEscalate } = await tripIssueRecoveryRateLimit({
+          issue,
+          agentId,
+          latestRun,
+          enqueueCount: continuationEnqueueCount,
+        });
+        if (didEscalate) {
+          result.rateLimitTripped += 1;
           result.issueIds.push(issue.id);
         } else {
           result.skipped += 1;
