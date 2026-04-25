@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -3177,7 +3178,16 @@ export function issueService(db: Db) {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
       const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
-      const [comment] = await db
+
+      // Deduplicate agent-authored comments: if the same run posts the same body
+      // within 60 seconds, return the existing comment instead of inserting a new one.
+      // The unique partial index on idempotency_key makes this atomic — concurrent
+      // duplicate inserts are collapsed at the DB level via ON CONFLICT DO NOTHING.
+      const idempotencyKey = actor.runId
+        ? createHash("sha256").update(`${actor.runId}:${redactedBody}`).digest("hex")
+        : null;
+
+      const inserted = await db
         .insert(issueComments)
         .values({
           companyId: issue.companyId,
@@ -3185,9 +3195,19 @@ export function issueService(db: Db) {
           authorAgentId: actor.agentId ?? null,
           authorUserId: actor.userId ?? null,
           createdByRunId: actor.runId ?? null,
+          idempotencyKey,
           body: redactedBody,
         })
+        .onConflictDoNothing()
         .returning();
+
+      const [comment] = inserted.length > 0 || !idempotencyKey
+        ? inserted
+        : await db
+          .select()
+          .from(issueComments)
+          .where(eq(issueComments.idempotencyKey, idempotencyKey))
+          .limit(1);
 
       // Update issue's updatedAt so comment activity is reflected in recency sorting
       await db
