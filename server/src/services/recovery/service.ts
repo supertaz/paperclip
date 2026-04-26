@@ -368,12 +368,41 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       `Paperclip detected a recovery loop: ${input.enqueueCount} recovery enqueues for this ` +
       `issue in the last ${windowMinutes} minutes. ` +
       "Moving the issue to `blocked` and pausing the agent to stop the loop.";
-    const escalated = await escalateStrandedAssignedIssue({
-      issue: input.issue,
-      previousStatus: input.issue.status as "todo" | "in_progress",
-      latestRun: input.latestRun,
-      comment,
+
+    // Block the issue directly — skip the normal escalation path to avoid
+    // creating a recovery sub-issue (which would itself enqueue a wake and
+    // risk re-entering the loop). This is a hard stop: human intervention is
+    // required before either the issue or the agent can resume.
+    const updated = await issuesSvc.update(input.issue.id, {
+      status: "blocked",
     });
+
+    if (updated) {
+      await issuesSvc.addComment(
+        input.issue.id,
+        `${comment}\n\n- Recovery issue: none — rate-limit trip requires direct operator intervention.\n- Next action: inspect the recovery run history, fix the underlying cause, then unblock the issue and unpause the agent.`,
+        {},
+      );
+      await logActivity(db, {
+        companyId: input.issue.companyId,
+        actorType: "system",
+        actorId: "system",
+        agentId: null,
+        runId: null,
+        action: "issue.updated",
+        entityType: "issue",
+        entityId: input.issue.id,
+        details: {
+          identifier: input.issue.identifier,
+          status: "blocked",
+          previousStatus: input.issue.status,
+          source: "recovery.per_issue_rate_limit",
+          enqueueCount: input.enqueueCount,
+          latestRunId: input.latestRun?.id ?? null,
+        },
+      });
+    }
+
     const [pausedAgent] = await db
       .update(agents)
       .set({
@@ -399,7 +428,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         reason: comment,
       });
     }
-    return { escalated: Boolean(escalated), paused: Boolean(pausedAgent) };
+    return { escalated: Boolean(updated), paused: Boolean(pausedAgent) };
   }
 
   async function enqueueStrandedIssueRecovery(input: {
