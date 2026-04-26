@@ -6577,14 +6577,10 @@ export function heartbeatService(db: Db) {
       return null;
     }
 
-    const bypassIssueExecutionLock =
-      reason === "issue_comment_mentioned" ||
-      readNonEmptyString(enrichedContextSnapshot.wakeReason) === "issue_comment_mentioned";
-
-    if (issueId && !bypassIssueExecutionLock) {
-      // Non-mention wakes must respect the issue execution lock so a second agent
-      // cannot start on the same issue workspace while the assignee has a live run.
-      // Mention-triggered wakes bypass this block entirely via bypassIssueExecutionLock.
+    if (issueId) {
+      // Mention-triggered wakes can request input from another agent, but they must
+      // still respect the issue execution lock so a second agent cannot start on the
+      // same issue workspace while the assignee already has a live run.
       const agentNameKey = normalizeAgentNameKey(agent.name);
 
       const outcome = await db.transaction(async (tx) => {
