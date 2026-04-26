@@ -2724,12 +2724,10 @@ export function issueService(db: Db) {
         throw unprocessable("Issue is blocked by unresolved blockers", { unresolvedBlockerIssueIds });
       }
 
-      const sameRunAssigneeCondition = checkoutRunId
-        ? and(
-          eq(issues.assigneeAgentId, agentId),
-          or(isNull(issues.checkoutRunId), eq(issues.checkoutRunId, checkoutRunId)),
-        )
-        : and(eq(issues.assigneeAgentId, agentId), isNull(issues.checkoutRunId));
+      const sameRunAssigneeCondition = and(
+        eq(issues.assigneeAgentId, agentId),
+        isNull(issues.checkoutRunId),
+      );
       const executionLockCondition = checkoutRunId
         ? or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId))
         : isNull(issues.executionRunId);
