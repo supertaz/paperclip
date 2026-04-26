@@ -350,6 +350,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           eq(heartbeatRuns.companyId, companyId),
           eq(heartbeatRuns.agentId, agentId),
           sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+          sql`${heartbeatRuns.contextSnapshot} ->> 'retryReason' IN ('assignment_recovery', 'issue_continuation_needed')`,
           gt(heartbeatRuns.createdAt, since),
         ),
       );
@@ -367,40 +368,38 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       `Paperclip detected a recovery loop: ${input.enqueueCount} recovery enqueues for this ` +
       `issue in the last ${windowMinutes} minutes. ` +
       "Moving the issue to `blocked` and pausing the agent to stop the loop.";
-    const [escalated, paused] = await Promise.all([
-      escalateStrandedAssignedIssue({
-        issue: input.issue,
-        previousStatus: input.issue.status as "todo" | "in_progress",
-        latestRun: input.latestRun,
-        comment,
-      }),
-      db
-        .update(agents)
-        .set({
-          status: "paused",
-          pauseReason: comment,
-          pausedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(agents.id, input.agentId),
-            notInArray(agents.status, ["paused", "terminated"]),
-          ),
-        )
-        .returning()
-        .then((rows) => rows[0] ?? null),
-    ]);
-    if (input.latestRun) {
+    const escalated = await escalateStrandedAssignedIssue({
+      issue: input.issue,
+      previousStatus: input.issue.status as "todo" | "in_progress",
+      latestRun: input.latestRun,
+      comment,
+    });
+    const [pausedAgent] = await db
+      .update(agents)
+      .set({
+        status: "paused",
+        pauseReason: comment,
+        pausedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(agents.id, input.agentId),
+          notInArray(agents.status, ["paused", "terminated"]),
+        ),
+      )
+      .returning();
+    const auditRunId = input.latestRun?.id ?? input.issue.checkoutRunId ?? input.issue.executionRunId ?? null;
+    if (auditRunId) {
       await db.insert(heartbeatRunWatchdogDecisions).values({
         companyId: input.issue.companyId,
-        runId: input.latestRun.id,
+        runId: auditRunId,
         evaluationIssueId: input.issue.id,
         decision: "rate_limited",
         reason: comment,
       });
     }
-    return { escalated: Boolean(escalated), paused: Boolean(paused) };
+    return { escalated: Boolean(escalated), paused: Boolean(pausedAgent) };
   }
 
   async function enqueueStrandedIssueRecovery(input: {
