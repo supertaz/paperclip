@@ -2739,6 +2739,7 @@ export function issueRoutes(
     }
 
     if (
+      !isIdempotent &&
       shouldWakeAssigneeOnCheckout({
         actorType: req.actor.type,
         actorAgentId: req.actor.type === "agent" ? req.actor.agentId ?? null : null,
