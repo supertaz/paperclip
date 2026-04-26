@@ -114,7 +114,7 @@ describeEmbeddedPostgres("daily continuation cap", () => {
       updatedAt: ISSUE_CREATED_AT,
     });
 
-    // Space runs evenly across the last 23 hours so all fall within the 24h window.
+    // Space runs 30s apart in recent history so all fall within the 24h window.
     for (let i = 0; i < runCount; i++) {
       const createdAt = new Date(Date.now() - (runCount - i) * 30_000);
       await db.insert(heartbeatRuns).values({

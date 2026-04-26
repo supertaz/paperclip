@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -99,8 +99,8 @@ async function countDailyContinuationRuns(
 ): Promise<number> {
   const windowStart = new Date(Date.now() - ISSUE_CONTINUATION_DAILY_WINDOW_MS);
   const effectiveSince = windowStart > since ? windowStart : since;
-  const rows = await db
-    .select({ id: heartbeatRuns.id })
+  const [row] = await db
+    .select({ total: count() })
     .from(heartbeatRuns)
     .where(
       and(
@@ -110,7 +110,7 @@ async function countDailyContinuationRuns(
         gt(heartbeatRuns.createdAt, effectiveSince),
       ),
     );
-  return rows.length;
+  return row?.total ?? 0;
 }
 
 function summarizeRunFailureForIssueComment(run: LatestIssueRun) {
@@ -1542,22 +1542,26 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
 
       const dailyCount = await countDailyContinuationRuns(db, issue.companyId, issue.id, issue.updatedAt);
       if (dailyCount >= ISSUE_CONTINUATION_DAILY_CAP) {
+        const windowDescription = issue.updatedAt > new Date(Date.now() - ISSUE_CONTINUATION_DAILY_WINDOW_MS)
+          ? "since the last status change"
+          : "in the last 24 hours";
         const updated = await escalateStrandedAssignedIssue({
           issue,
           previousStatus: "in_progress",
           latestRun,
           comment:
-            `Paperclip queued ${dailyCount} continuation runs for this issue in the last 24 hours without resolving it. ` +
+            `Paperclip queued ${dailyCount} continuation runs for this issue ${windowDescription} without resolving it. ` +
             "Moving it to `blocked` so it is visible for intervention.",
         });
-        if (latestRun) {
+        const auditRunId = latestRun?.id ?? issue.checkoutRunId ?? issue.executionRunId ?? null;
+        if (auditRunId) {
           await db.insert(heartbeatRunWatchdogDecisions).values({
             companyId: issue.companyId,
-            runId: latestRun.id,
+            runId: auditRunId,
             evaluationIssueId: issue.id,
             decision: "rate_limited",
             snoozedUntil: null,
-            reason: `Daily continuation cap of ${ISSUE_CONTINUATION_DAILY_CAP} reached (${dailyCount} runs in 24h).`,
+            reason: `Daily continuation cap of ${ISSUE_CONTINUATION_DAILY_CAP} reached (${dailyCount} runs ${windowDescription}).`,
             createdByAgentId: null,
             createdByUserId: null,
             createdByRunId: null,
