@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -342,8 +342,8 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     windowMs: number,
   ) {
     const since = new Date(Date.now() - windowMs);
-    const rows = await db
-      .select({ id: heartbeatRuns.id })
+    const [row] = await db
+      .select({ total: count() })
       .from(heartbeatRuns)
       .where(
         and(
@@ -354,7 +354,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           gt(heartbeatRuns.createdAt, since),
         ),
       );
-    return rows.length;
+    return row?.total ?? 0;
   }
 
   async function tripIssueRecoveryRateLimit(input: {
