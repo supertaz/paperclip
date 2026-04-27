@@ -3185,7 +3185,7 @@ export function issueService(db: Db) {
       // this atomic — concurrent duplicate inserts are collapsed at the DB level
       // via ON CONFLICT DO NOTHING.
       const idempotencyKey = actor.runId
-        ? createHash("sha256").update(`${actor.runId}:${redactedBody}`).digest("hex")
+        ? createHash("sha256").update(`${actor.runId}:${issueId}:${redactedBody}`).digest("hex")
         : null;
 
       const inserted = await db
