@@ -1,11 +1,12 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
   agentWakeupRequests,
   agents,
+  approvals,
   assets,
   companies,
   companyMemberships,
@@ -13,6 +14,7 @@ import {
   goals,
   heartbeatRuns,
   executionWorkspaces,
+  issueApprovals,
   issueAttachments,
   issueInboxArchives,
   issueLabels,
@@ -20,6 +22,7 @@ import {
   issueComments,
   issueDocuments,
   issueReadStates,
+  issueThreadInteractions,
   issues,
   labels,
   projectWorkspaces,
@@ -102,6 +105,7 @@ export interface IssueFilters {
   originId?: string;
   includeRoutineExecutions?: boolean;
   excludeRoutineExecutions?: boolean;
+  includeBlockedBy?: boolean;
   q?: string;
   limit?: number;
 }
@@ -660,6 +664,10 @@ async function withIssueLabels(dbOrTx: any, rows: IssueRow[]): Promise<IssueWith
 const ACTIVE_RUN_STATUSES = ["queued", "running"];
 const BLOCKER_ATTENTION_ACTIVE_RUN_STATUSES = ["queued", "running"];
 const BLOCKER_ATTENTION_ACTIVE_WAKE_STATUSES = ["queued", "deferred_issue_execution"];
+const BLOCKER_ATTENTION_PENDING_INTERACTION_STATUSES = ["pending"];
+const BLOCKER_ATTENTION_PENDING_APPROVAL_STATUSES = ["pending", "revision_requested"];
+const BLOCKER_ATTENTION_OPEN_RECOVERY_ORIGIN_KIND = "harness_liveness_escalation";
+const BLOCKER_ATTENTION_OPEN_RECOVERY_TERMINAL_STATUSES = ["done", "cancelled"];
 const BLOCKER_ATTENTION_MAX_DEPTH = 8;
 const BLOCKER_ATTENTION_MAX_NODES = 2000;
 const BLOCKER_ATTENTION_INVOKABLE_AGENT_STATUSES = new Set(["active", "idle", "running", "error"]);
@@ -742,8 +750,10 @@ function createIssueBlockerAttention(input: Partial<IssueBlockerAttention> = {})
     reason: input.reason ?? null,
     unresolvedBlockerCount: input.unresolvedBlockerCount ?? 0,
     coveredBlockerCount: input.coveredBlockerCount ?? 0,
+    stalledBlockerCount: input.stalledBlockerCount ?? 0,
     attentionBlockerCount: input.attentionBlockerCount ?? 0,
     sampleBlockerIdentifier: input.sampleBlockerIdentifier ?? null,
+    sampleStalledBlockerIdentifier: input.sampleStalledBlockerIdentifier ?? null,
   };
 }
 
@@ -1026,6 +1036,55 @@ async function listIssueBlockerAttentionMap(
     }
   }
 
+  const reviewNodeIds = [...nodesById.values()]
+    .filter((node) => node.status === "in_review")
+    .map((node) => node.id);
+  const explicitWaitingIssueIds = new Set<string>();
+  if (reviewNodeIds.length > 0) {
+    for (const chunk of chunkList(reviewNodeIds, ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE)) {
+      const interactionRows: Array<{ issueId: string }> = await dbOrTx
+        .select({ issueId: issueThreadInteractions.issueId })
+        .from(issueThreadInteractions)
+        .where(
+          and(
+            eq(issueThreadInteractions.companyId, companyId),
+            inArray(issueThreadInteractions.status, BLOCKER_ATTENTION_PENDING_INTERACTION_STATUSES),
+            inArray(issueThreadInteractions.issueId, chunk),
+          ),
+        );
+      for (const row of interactionRows) explicitWaitingIssueIds.add(row.issueId);
+
+      const approvalRows: Array<{ issueId: string }> = await dbOrTx
+        .select({ issueId: issueApprovals.issueId })
+        .from(issueApprovals)
+        .innerJoin(approvals, eq(issueApprovals.approvalId, approvals.id))
+        .where(
+          and(
+            eq(issueApprovals.companyId, companyId),
+            inArray(approvals.status, BLOCKER_ATTENTION_PENDING_APPROVAL_STATUSES),
+            inArray(issueApprovals.issueId, chunk),
+          ),
+        );
+      for (const row of approvalRows) explicitWaitingIssueIds.add(row.issueId);
+
+      const recoveryRows: Array<{ originId: string | null }> = await dbOrTx
+        .select({ originId: issues.originId })
+        .from(issues)
+        .where(
+          and(
+            eq(issues.companyId, companyId),
+            eq(issues.originKind, BLOCKER_ATTENTION_OPEN_RECOVERY_ORIGIN_KIND),
+            isNull(issues.hiddenAt),
+            inArray(issues.originId, chunk),
+            notInArray(issues.status, BLOCKER_ATTENTION_OPEN_RECOVERY_TERMINAL_STATUSES),
+          ),
+        );
+      for (const row of recoveryRows) {
+        if (row.originId) explicitWaitingIssueIds.add(row.originId);
+      }
+    }
+  }
+
   const agentRows: IssueBlockerAttentionAgentRow[] = agentIds.size > 0
     ? await dbOrTx
         .select({
@@ -1038,39 +1097,83 @@ async function listIssueBlockerAttentionMap(
     : [];
   const agentsById = new Map(agentRows.map((agent) => [agent.id, agent]));
 
-  type PathClassification = { covered: boolean; sampleBlockerIdentifier: string | null };
+  type PathClassification = {
+    covered: boolean;
+    stalled: boolean;
+    sampleBlockerIdentifier: string | null;
+    sampleStalledBlockerIdentifier: string | null;
+  };
   const classifyPath = (
     nodeId: string,
     seen: Set<string>,
   ): PathClassification => {
-    if (truncated || seen.has(nodeId)) return { covered: false, sampleBlockerIdentifier: blockerSampleIdentifier(nodesById.get(nodeId)) };
+    const sample = blockerSampleIdentifier(nodesById.get(nodeId));
+    if (truncated || seen.has(nodeId)) {
+      return { covered: false, stalled: false, sampleBlockerIdentifier: sample, sampleStalledBlockerIdentifier: null };
+    }
     const node = nodesById.get(nodeId);
-    if (!node || node.companyId !== companyId) return { covered: false, sampleBlockerIdentifier: nodeId };
-    if (node.status === "done") return { covered: true, sampleBlockerIdentifier: blockerSampleIdentifier(node) };
-    if (activeIssueIds.has(node.id)) return { covered: true, sampleBlockerIdentifier: blockerSampleIdentifier(node) };
-    if (node.status === "cancelled") return { covered: false, sampleBlockerIdentifier: blockerSampleIdentifier(node) };
+    if (!node || node.companyId !== companyId) {
+      return { covered: false, stalled: false, sampleBlockerIdentifier: nodeId, sampleStalledBlockerIdentifier: null };
+    }
+    const nodeSample = blockerSampleIdentifier(node);
+    if (node.status === "done") {
+      return { covered: true, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
+    }
+    if (node.status === "in_review") {
+      const hasWaitingPath = activeIssueIds.has(node.id) || Boolean(node.assigneeUserId) || explicitWaitingIssueIds.has(node.id);
+      if (hasWaitingPath) {
+        return { covered: true, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
+      }
+      return { covered: false, stalled: true, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: nodeSample };
+    }
+    if (activeIssueIds.has(node.id)) {
+      return { covered: true, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
+    }
+    if (node.status === "cancelled") {
+      return { covered: false, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
+    }
 
     const downstream = (edgesByIssueId.get(node.id) ?? []).filter((edge) => nodesById.get(edge.blockerIssueId)?.status !== "done");
     if (downstream.length > 0) {
       const nextSeen = new Set(seen);
       nextSeen.add(nodeId);
       const classified = downstream.map((edge) => classifyPath(edge.blockerIssueId, nextSeen));
-      const attention = classified.find((result) => !result.covered);
-      if (attention) return attention;
+      const stalledChild = classified.find((result) => result.stalled || result.sampleStalledBlockerIdentifier);
+      const sampleStalled = stalledChild?.sampleStalledBlockerIdentifier ?? null;
+      const hardAttention = classified.find((result) => !result.covered && !result.stalled);
+      if (hardAttention) {
+        return {
+          covered: false,
+          stalled: false,
+          sampleBlockerIdentifier: hardAttention.sampleBlockerIdentifier,
+          sampleStalledBlockerIdentifier: sampleStalled,
+        };
+      }
+      const stalledEntry = classified.find((result) => result.stalled);
+      if (stalledEntry) {
+        return {
+          covered: false,
+          stalled: true,
+          sampleBlockerIdentifier: stalledEntry.sampleBlockerIdentifier,
+          sampleStalledBlockerIdentifier: sampleStalled,
+        };
+      }
       return {
         covered: true,
-        sampleBlockerIdentifier: classified[0]?.sampleBlockerIdentifier ?? blockerSampleIdentifier(node),
+        stalled: false,
+        sampleBlockerIdentifier: classified[0]?.sampleBlockerIdentifier ?? nodeSample,
+        sampleStalledBlockerIdentifier: null,
       };
     }
 
     if (node.assigneeAgentId) {
       const assignee = agentsById.get(node.assigneeAgentId);
       if (!assignee || assignee.companyId !== companyId || !BLOCKER_ATTENTION_INVOKABLE_AGENT_STATUSES.has(assignee.status)) {
-        return { covered: false, sampleBlockerIdentifier: blockerSampleIdentifier(node) };
+        return { covered: false, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
       }
     }
 
-    return { covered: false, sampleBlockerIdentifier: blockerSampleIdentifier(node) };
+    return { covered: false, stalled: false, sampleBlockerIdentifier: nodeSample, sampleStalledBlockerIdentifier: null };
   };
 
   for (const root of roots) {
@@ -1088,22 +1191,41 @@ async function listIssueBlockerAttentionMap(
       result: classifyPath(edge.blockerIssueId, new Set([root.id])),
     }));
     const coveredBlockerCount = classified.filter((entry) => entry.result.covered).length;
-    const attentionBlockerCount = classified.length - coveredBlockerCount;
-    const attentionEntry = classified.find((entry) => !entry.result.covered);
-    const sampleEntry = attentionEntry ?? classified[0] ?? null;
+    const stalledBlockerCount = classified.filter((entry) => entry.result.stalled).length;
+    const attentionBlockerCount = classified.length - coveredBlockerCount - stalledBlockerCount;
+    const hardAttentionEntry = classified.find((entry) => !entry.result.covered && !entry.result.stalled);
+    const stalledEntry = classified.find((entry) => entry.result.stalled);
+    const sampleEntry = hardAttentionEntry ?? stalledEntry ?? classified[0] ?? null;
     const sampleNode = sampleEntry ? nodesById.get(sampleEntry.edge.blockerIssueId) : null;
+    const sampleStalledFromChain = classified
+      .map((entry) => entry.result.sampleStalledBlockerIdentifier)
+      .find((value) => value);
+
+    let state: IssueBlockerAttention["state"];
+    let reason: IssueBlockerAttention["reason"];
+    if (attentionBlockerCount > 0) {
+      state = "needs_attention";
+      reason = "attention_required";
+    } else if (stalledBlockerCount > 0) {
+      state = "stalled";
+      reason = "stalled_review";
+    } else {
+      state = "covered";
+      reason = topLevelEdges.every((edge) => nodesById.get(edge.blockerIssueId)?.parentId === root.id)
+        ? "active_child"
+        : "active_dependency";
+    }
 
     attentionMap.set(root.id, createIssueBlockerAttention({
-      state: attentionBlockerCount === 0 ? "covered" : "needs_attention",
-      reason: attentionBlockerCount === 0
-        ? topLevelEdges.every((edge) => nodesById.get(edge.blockerIssueId)?.parentId === root.id)
-          ? "active_child"
-          : "active_dependency"
-        : "attention_required",
+      state,
+      reason,
       unresolvedBlockerCount: topLevelEdges.length,
       coveredBlockerCount,
+      stalledBlockerCount,
       attentionBlockerCount,
       sampleBlockerIdentifier: sampleEntry?.result.sampleBlockerIdentifier ?? blockerSampleIdentifier(sampleNode),
+      sampleStalledBlockerIdentifier:
+        stalledEntry?.result.sampleStalledBlockerIdentifier ?? sampleStalledFromChain ?? null,
     }));
   }
 
@@ -1295,6 +1417,63 @@ async function lastActivityStatsForIssues(
     }
   }
   return [...byIssueId.values()];
+}
+
+async function blockedByMapForIssues(
+  dbOrTx: any,
+  companyId: string,
+  issueIds: string[],
+): Promise<Map<string, IssueRelationIssueSummary[]>> {
+  const map = new Map<string, IssueRelationIssueSummary[]>();
+  const uniqueIssueIds = [...new Set(issueIds)];
+  if (uniqueIssueIds.length === 0) return map;
+
+  for (const issueId of uniqueIssueIds) {
+    map.set(issueId, []);
+  }
+
+  for (const issueIdChunk of chunkList(uniqueIssueIds, ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE)) {
+    const rows = await dbOrTx
+      .select({
+        currentIssueId: issueRelations.relatedIssueId,
+        relatedId: issues.id,
+        identifier: issues.identifier,
+        title: issues.title,
+        status: issues.status,
+        priority: issues.priority,
+        assigneeAgentId: issues.assigneeAgentId,
+        assigneeUserId: issues.assigneeUserId,
+      })
+      .from(issueRelations)
+      .innerJoin(issues, eq(issueRelations.issueId, issues.id))
+      .where(
+        and(
+          eq(issueRelations.companyId, companyId),
+          eq(issueRelations.type, "blocks"),
+          inArray(issueRelations.relatedIssueId, issueIdChunk),
+        ),
+      );
+
+    for (const row of rows) {
+      const blockedBy = map.get(row.currentIssueId);
+      if (!blockedBy) continue;
+      blockedBy.push({
+        id: row.relatedId,
+        identifier: row.identifier,
+        title: row.title,
+        status: row.status as IssueRelationIssueSummary["status"],
+        priority: row.priority as IssueRelationIssueSummary["priority"],
+        assigneeAgentId: row.assigneeAgentId,
+        assigneeUserId: row.assigneeUserId,
+      });
+    }
+  }
+
+  for (const blockedBy of map.values()) {
+    blockedBy.sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  return map;
 }
 
 export function issueService(db: Db) {
@@ -1785,6 +1964,7 @@ export function issueService(db: Db) {
       const inboxArchivedByUserId = filters?.inboxArchivedByUserId?.trim() || undefined;
       const unreadForUserId = filters?.unreadForUserId?.trim() || undefined;
       const contextUserId = unreadForUserId ?? touchedByUserId ?? inboxArchivedByUserId;
+      const includeBlockedBy = filters?.includeBlockedBy === true;
       const rawSearch = filters?.q?.trim() ?? "";
       const hasSearch = rawSearch.length > 0;
       const escapedSearch = hasSearch ? escapeLikePattern(rawSearch) : "";
@@ -1915,7 +2095,7 @@ export function issueService(db: Db) {
       }
 
       const issueIds = withRuns.map((row) => row.id);
-      const [statsRows, readRows, lastActivityRows] = await Promise.all([
+      const [statsRows, readRows, lastActivityRows, blockedByMap] = await Promise.all([
         contextUserId
           ? userCommentStatsForIssues(db, companyId, contextUserId, issueIds)
           : Promise.resolve([]),
@@ -1923,6 +2103,9 @@ export function issueService(db: Db) {
           ? userReadStatsForIssues(db, companyId, contextUserId, issueIds)
           : Promise.resolve([]),
         lastActivityStatsForIssues(db, companyId, issueIds),
+        includeBlockedBy
+          ? blockedByMapForIssues(db, companyId, issueIds)
+          : Promise.resolve(new Map<string, IssueRelationIssueSummary[]>()),
       ]);
       const statsByIssueId = new Map(statsRows.map((row) => [row.issueId, row]));
       const lastActivityByIssueId = new Map(lastActivityRows.map((row) => [row.issueId, row]));
@@ -1938,6 +2121,7 @@ export function issueService(db: Db) {
           ) ?? row.updatedAt;
           return {
             ...row,
+            ...(includeBlockedBy ? { blockedBy: blockedByMap.get(row.id) ?? [] } : {}),
             lastActivityAt,
             ...(blockerAttentionByIssueId.has(row.id) ? { blockerAttention: blockerAttentionByIssueId.get(row.id) } : {}),
           };
@@ -1955,6 +2139,7 @@ export function issueService(db: Db) {
         ) ?? row.updatedAt;
         return {
           ...row,
+          ...(includeBlockedBy ? { blockedBy: blockedByMap.get(row.id) ?? [] } : {}),
           lastActivityAt,
           ...(blockerAttentionByIssueId.has(row.id) ? { blockerAttention: blockerAttentionByIssueId.get(row.id) } : {}),
           ...deriveIssueUserContext(row, contextUserId, {
@@ -3075,14 +3260,14 @@ export function issueService(db: Db) {
         if (!anchor) return [];
         conditions.push(
           order === "asc"
-            ? sql<boolean>`(
-                ${issueComments.createdAt} > ${anchor.createdAt}
-                OR (${issueComments.createdAt} = ${anchor.createdAt} AND ${issueComments.id} > ${anchor.id})
-              )`
-            : sql<boolean>`(
-                ${issueComments.createdAt} < ${anchor.createdAt}
-                OR (${issueComments.createdAt} = ${anchor.createdAt} AND ${issueComments.id} < ${anchor.id})
-              )`,
+            ? or(
+                gt(issueComments.createdAt, anchor.createdAt),
+                and(eq(issueComments.createdAt, anchor.createdAt), gt(issueComments.id, anchor.id)),
+              )!
+            : or(
+                lt(issueComments.createdAt, anchor.createdAt),
+                and(eq(issueComments.createdAt, anchor.createdAt), lt(issueComments.id, anchor.id)),
+              )!,
         );
       }
 
@@ -3214,11 +3399,14 @@ export function issueService(db: Db) {
         throw new Error("Failed to insert or retrieve deduplicated comment");
       }
 
-      // Update issue's updatedAt so comment activity is reflected in recency sorting
-      await db
-        .update(issues)
-        .set({ updatedAt: new Date() })
-        .where(eq(issues.id, issueId));
+      // Update issue's updatedAt only for a newly inserted comment so duplicate
+      // retries do not create fresh activity.
+      if (inserted.length > 0) {
+        await db
+          .update(issues)
+          .set({ updatedAt: new Date() })
+          .where(eq(issues.id, issueId));
+      }
 
       return redactIssueComment(comment, currentUserRedactionOptions.enabled);
     },
