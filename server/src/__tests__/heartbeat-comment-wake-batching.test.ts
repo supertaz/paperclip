@@ -949,18 +949,20 @@ describe("heartbeat comment wake batching", () => {
         return runs.length === 1 && runs[0]?.status === "succeeded";
       }, 90_000);
 
-      const deferredAfterRelease = await db
-        .select()
-        .from(agentWakeupRequests)
-        .where(
-          and(
-            eq(agentWakeupRequests.companyId, companyId),
-            eq(agentWakeupRequests.agentId, mentionedAgentId),
-          ),
-        )
-        .then((rows) => rows[0] ?? null);
-      expect(deferredAfterRelease?.status).toBe("cancelled");
-      expect(deferredAfterRelease?.error).toContain("Deferred wake suppressed");
+      await waitFor(async () => {
+        const deferredAfterRelease = await db
+          .select()
+          .from(agentWakeupRequests)
+          .where(
+            and(
+              eq(agentWakeupRequests.companyId, companyId),
+              eq(agentWakeupRequests.agentId, mentionedAgentId),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+        return deferredAfterRelease?.status === "cancelled" &&
+          deferredAfterRelease?.error?.includes("Deferred wake suppressed");
+      });
 
       const issueAfterPromotion = await db
         .select({
