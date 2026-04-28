@@ -447,17 +447,24 @@ function InstanceNumberField({
   onCommit: (v: number) => void;
 }) {
   const [draft, setDraft] = useState<string>(String(value));
+  const parsedDraft = parseInt(draft, 10);
+  const invalidDraft =
+    draft.trim() === "" ||
+    Number.isNaN(parsedDraft) ||
+    parsedDraft < min ||
+    parsedDraft > max;
+  const errorMessage = invalidDraft ? `Enter a whole number from ${min} to ${max}.` : null;
 
   useEffect(() => {
     setDraft(String(value));
   }, [value]);
 
   function handleBlur() {
-    const parsed = parseInt(draft, 10);
-    if (!Number.isNaN(parsed) && parsed >= min && parsed <= max && parsed !== value) {
-      onCommit(parsed);
-    } else {
-      setDraft(String(value));
+    if (invalidDraft) {
+      return;
+    }
+    if (parsedDraft !== value) {
+      onCommit(parsedDraft);
     }
   }
 
@@ -471,17 +478,26 @@ function InstanceNumberField({
         max={max}
         value={draft}
         disabled={disabled}
+        aria-invalid={invalidDraft}
+        aria-describedby={errorMessage ? `${label.replaceAll(" ", "-").toLowerCase()}-error` : undefined}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={handleBlur}
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") setDraft(String(value));
         }}
         className={cn(
           "w-full rounded-md border border-border bg-background px-3 py-2 text-sm",
           "focus:outline-none focus:ring-1 focus:ring-foreground/30",
           "disabled:cursor-not-allowed disabled:opacity-60",
+          invalidDraft && "border-destructive focus:ring-destructive/30",
         )}
       />
+      {errorMessage ? (
+        <p id={`${label.replaceAll(" ", "-").toLowerCase()}-error`} className="text-xs text-destructive">
+          {errorMessage}
+        </p>
+      ) : null}
     </div>
   );
 }
