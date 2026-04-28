@@ -380,22 +380,24 @@ find_last_integrated_upstream_sha() {
 }
 
 find_initial_integration_base() {
-  local refs=()
-  local number ref
+  local number ref base best
   while IFS= read -r number; do
     [ -z "$number" ] && continue
     ref="refs/remotes/paperclip-integration/pr-$number"
     if git -C "$REPO_DIR" rev-parse --verify "$ref" >/dev/null 2>&1; then
-      refs+=("$ref")
+      base=$(git -C "$REPO_DIR" merge-base "$UPSTREAM/$UPSTREAM_BRANCH" "$ref")
+      if [ -z "$best" ] || git -C "$REPO_DIR" merge-base --is-ancestor "$best" "$base"; then
+        best="$base"
+      fi
     fi
   done < <(jq -r '.[].number' "$STATE_DIR/integration-prs.json")
 
-  if [ "${#refs[@]}" -eq 0 ]; then
+  if [ -z "$best" ]; then
     git -C "$REPO_DIR" rev-parse "$UPSTREAM/$UPSTREAM_BRANCH"
     return
   fi
 
-  git -C "$REPO_DIR" merge-base --octopus "$UPSTREAM/$UPSTREAM_BRANCH" "${refs[@]}" 2>/dev/null || true
+  echo "$best"
 }
 
 write_integration_manifest() {
