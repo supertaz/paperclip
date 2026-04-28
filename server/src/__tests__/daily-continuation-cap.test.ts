@@ -114,9 +114,12 @@ describeEmbeddedPostgres("daily continuation cap", () => {
       updatedAt: ISSUE_CREATED_AT,
     });
 
-    // Space runs 30s apart in recent history so all fall within the 24h window.
+    const runSpacingMs = breakConsecutiveTail ? 30 * 60_000 : 30_000;
+    // Space runs so all fall within the 24h window. When the fixture is used
+    // with other recovery caps, keep the history outside the short rate-limit
+    // window so the daily cap is the behavior under test.
     for (let i = 0; i < runCount; i++) {
-      const createdAt = new Date(Date.now() - (runCount - i) * 30_000);
+      const createdAt = new Date(Date.now() - (runCount - i) * runSpacingMs);
       await db.insert(heartbeatRuns).values({
         id: randomUUID(),
         companyId,
