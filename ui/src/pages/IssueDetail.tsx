@@ -13,7 +13,7 @@ import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
-import { useDialog } from "../context/DialogContext";
+import { useDialogActions } from "../context/DialogContext";
 import { usePanel } from "../context/PanelContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
@@ -51,6 +51,7 @@ import {
   matchesIssueRef,
   mergeIssueComments,
   removeIssueCommentFromPages,
+  shouldAutoloadOlderIssueComments,
   takeOptimisticIssueComment,
   upsertIssueCommentInPages,
   type IssueCommentReassignment,
@@ -76,6 +77,7 @@ import { ImageGalleryModal } from "../components/ImageGalleryModal";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { StatusIcon } from "../components/StatusIcon";
 import { PriorityIcon } from "../components/PriorityIcon";
+import { ProductivityReviewBadge } from "../components/ProductivityReviewBadge";
 import { Identity } from "../components/Identity";
 import { PluginSlotMount, PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
@@ -98,6 +100,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatIssueActivityAction } from "@/lib/activity-format";
 import { buildIssuePropertiesPanelKey } from "../lib/issue-properties-panel-key";
 import { shouldRenderRichSubIssuesSection } from "../lib/issue-detail-subissues";
+import { filterIssueDescendants } from "../lib/issue-tree";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
 import {
   Activity as ActivityIcon,
@@ -106,6 +109,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  Eye,
   EyeOff,
   Hexagon,
   ListTree,
@@ -151,6 +155,7 @@ type IssueDetailComment = (IssueComment | OptimisticIssueComment) & {
 
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
 const ISSUE_COMMENT_PAGE_SIZE = 50;
+const ISSUE_COMMENT_AUTOLOAD_LIMIT = ISSUE_COMMENT_PAGE_SIZE * 3;
 const TREE_CONTROL_MODE_LABEL: Record<IssueTreeControlMode, string> = {
   pause: "Pause subtree",
   resume: "Resume subtree",
@@ -381,7 +386,7 @@ function IssueDetailLoadingState({
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           {headerSeed ? (
             <>
-              <StatusIcon status={headerSeed.status} />
+              <StatusIcon status={headerSeed.status} blockerAttention={headerSeed.blockerAttention} />
               <PriorityIcon priority={headerSeed.priority} />
               {identifier ? (
                 <span className="text-sm font-mono text-muted-foreground shrink-0">{identifier}</span>
@@ -548,12 +553,14 @@ type IssueDetailChatTabProps = {
   issueStatus: Issue["status"];
   executionRunId: string | null;
   blockedBy: Issue["blockedBy"];
+  blockerAttention: Issue["blockerAttention"] | null;
   comments: IssueDetailComment[];
   locallyQueuedCommentRunIds: ReadonlyMap<string, string>;
   interactions: IssueThreadInteraction[];
   hasOlderComments: boolean;
   commentsLoadingOlder: boolean;
   onLoadOlderComments: () => void;
+  onRefreshLatestComments: () => Promise<unknown> | void;
   composerRef: Ref<IssueChatComposerHandle>;
   feedbackVotes?: FeedbackVote[];
   feedbackDataSharingPreference: "allowed" | "not_allowed" | "prompt";
@@ -577,7 +584,7 @@ type IssueDetailChatTabProps = {
   ) => Promise<void>;
   onAdd: (body: string, reopen?: boolean, reassignment?: CommentReassignment) => Promise<void>;
   onImageUpload: (file: File) => Promise<string>;
-  onAttachImage: (file: File) => Promise<void>;
+  onAttachImage: (file: File) => Promise<IssueAttachment | void>;
   onInterruptQueued: (runId: string) => Promise<void>;
   onCancelQueued: (commentId: string) => void;
   interruptingQueuedRunId: string | null;
@@ -600,12 +607,14 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   issueStatus,
   executionRunId,
   blockedBy,
+  blockerAttention,
   comments,
   locallyQueuedCommentRunIds,
   interactions,
   hasOlderComments,
   commentsLoadingOlder,
   onLoadOlderComments,
+  onRefreshLatestComments,
   composerRef,
   feedbackVotes,
   feedbackDataSharingPreference,
@@ -691,6 +700,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
   const commentsWithRunMeta = useMemo<IssueDetailComment[]>(() => {
     const activeRunStartedAt = runningIssueRun?.startedAt ?? runningIssueRun?.createdAt ?? null;
     const runMetaByCommentId = new Map<string, { runId: string; runAgentId: string | null; interruptedRunId: string | null }>();
+    const followUpCommentIds = new Set<string>();
     const agentIdByRunId = new Map<string, string>();
 
     for (const run of resolvedLinkedRuns) {
@@ -709,10 +719,22 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         interruptedRunId,
       });
     }
+    for (const evt of resolvedActivity) {
+      if (evt.action !== "issue.comment_added") continue;
+      const details = evt.details ?? {};
+      const commentId = typeof details["commentId"] === "string" ? details["commentId"] : null;
+      if (!commentId) continue;
+      if (details["followUpRequested"] === true || details["resumeIntent"] === true) {
+        followUpCommentIds.add(commentId);
+      }
+    }
 
     return comments.map((comment) => {
       const meta = runMetaByCommentId.get(comment.id);
       const nextComment: IssueDetailComment = meta ? { ...comment, ...meta } : { ...comment };
+      if (followUpCommentIds.has(comment.id)) {
+        nextComment.followUpRequested = true;
+      }
       const queuedTargetRunId = locallyQueuedCommentRunIds.get(comment.id) ?? null;
       const locallyQueuedComment = applyLocalQueuedIssueCommentState(nextComment, {
         queuedTargetRunId,
@@ -781,6 +803,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
         liveRuns={resolvedLiveRuns}
         activeRun={resolvedActiveRun}
         blockedBy={blockedBy ?? []}
+        blockerAttention={blockerAttention}
         companyId={companyId}
         projectId={projectId}
         issueStatus={issueStatus}
@@ -816,6 +839,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
             }
           : undefined}
         onImageClick={onImageClick}
+        onRefreshLatestComments={onRefreshLatestComments}
       />
     </div>
   );
@@ -823,6 +847,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
 
 type IssueDetailActivityTabProps = {
   issueId: string;
+  companyId: string;
   issueStatus: Issue["status"];
   childIssues: Issue[];
   agentMap: Map<string, Agent>;
@@ -836,6 +861,7 @@ type IssueDetailActivityTabProps = {
 
 function IssueDetailActivityTab({
   issueId,
+  companyId,
   issueStatus,
   childIssues,
   agentMap,
@@ -927,6 +953,7 @@ function IssueDetailActivityTab({
       <div className="mb-3">
         <IssueRunLedger
           issueId={issueId}
+          companyId={companyId}
           issueStatus={issueStatus}
           childIssues={childIssues}
           agentMap={agentMap}
@@ -1001,7 +1028,7 @@ function IssueDetailActivityTab({
 export function IssueDetail() {
   const { issueId } = useParams<{ issueId: string }>();
   const { selectedCompanyId } = useCompany();
-  const { openNewIssue } = useDialog();
+  const { openNewIssue } = useDialogActions();
   const { openPanel, closePanel, panelVisible, setPanelVisible } = usePanel();
   const { setBreadcrumbs, setMobileToolbar } = useBreadcrumbs();
   const queryClient = useQueryClient();
@@ -1068,6 +1095,7 @@ export function IssueDetail() {
     isFetchingNextPage: commentsLoadingOlder,
     hasNextPage: hasOlderComments,
     fetchNextPage: fetchOlderComments,
+    refetch: refetchComments,
   } = useInfiniteQuery({
     queryKey: queryKeys.issues.comments(issueId!),
     queryFn: ({ pageParam }) =>
@@ -1085,6 +1113,18 @@ export function IssueDetail() {
   const comments = useMemo(
     () => flattenIssueCommentPages(commentPages?.pages),
     [commentPages?.pages],
+  );
+  const shouldPrefetchOlderComments = useMemo(
+    () =>
+      shouldAutoloadOlderIssueComments({
+        activeDetailTab: detailTab,
+        hasOlderComments: hasOlderComments ?? false,
+        loadedCommentCount: comments.length,
+        initialPageLoading: commentsLoading,
+        olderPageLoading: commentsLoadingOlder,
+        autoLoadLimit: ISSUE_COMMENT_AUTOLOAD_LIMIT,
+      }),
+    [comments.length, commentsLoading, commentsLoadingOlder, detailTab, hasOlderComments],
   );
   const { data: interactions = [] } = useQuery({
     queryKey: queryKeys.issues.interactions(issueId!),
@@ -1132,9 +1172,9 @@ export function IssueDetail() {
   const { data: rawChildIssues = [], isLoading: childIssuesLoading } = useQuery({
     queryKey:
       issue?.id && resolvedCompanyId
-        ? queryKeys.issues.listByParent(resolvedCompanyId, issue.id)
+        ? queryKeys.issues.listByDescendantRoot(resolvedCompanyId, issue.id)
         : ["issues", "parent", "pending"],
-    queryFn: () => issuesApi.list(resolvedCompanyId!, { parentId: issue!.id }),
+    queryFn: () => issuesApi.list(resolvedCompanyId!, { descendantOf: issue!.id, includeBlockedBy: true }),
     enabled: !!resolvedCompanyId && !!issue?.id,
     placeholderData: keepPreviousDataForSameQueryTail<Issue[]>(issue?.id ?? "pending"),
   });
@@ -1286,8 +1326,11 @@ export function IssueDetail() {
     [issue?.project, issue?.projectId, orderedProjects],
   );
   const childIssues = useMemo(
-    () => [...rawChildIssues].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
-    [rawChildIssues],
+    () => {
+      const descendants = issue?.id ? filterIssueDescendants(issue.id, rawChildIssues) : rawChildIssues;
+      return [...descendants].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    },
+    [issue?.id, rawChildIssues],
   );
   const liveIssueIds = useMemo(() => collectLiveIssueIds(companyLiveRuns), [companyLiveRuns]);
   const issuePanelKey = useMemo(
@@ -2517,6 +2560,17 @@ export function IssueDetail() {
   const loadOlderComments = useCallback(() => {
     void fetchOlderComments();
   }, [fetchOlderComments]);
+  const refetchLatestComments = useCallback(async () => {
+    // Refetch the entire infinite-query (page 0 first), so any comments that
+    // arrived after the initial load — including ones live updates may have
+    // missed during reconnects — are present before we scroll the user to
+    // the absolute newest.
+    await refetchComments();
+  }, [refetchComments]);
+  useEffect(() => {
+    if (!shouldPrefetchOlderComments) return;
+    void fetchOlderComments();
+  }, [fetchOlderComments, shouldPrefetchOlderComments]);
   const handleCommentVote = useCallback(async (commentId: string, vote: "up" | "down", options?: { allowSharing?: boolean; reason?: string }) => {
     await feedbackVoteMutation.mutateAsync({
       targetType: "issue_comment",
@@ -2539,7 +2593,7 @@ export function IssueDetail() {
     return attachment.contentPath;
   }, [uploadAttachment]);
   const handleCommentAttachImage = useCallback(async (file: File) => {
-    await uploadAttachment.mutateAsync(file);
+    return uploadAttachment.mutateAsync(file);
   }, [uploadAttachment]);
   const handleInterruptQueuedRun = useCallback(async (runId: string) => {
     await interruptQueuedComment.mutateAsync(runId);
@@ -2698,7 +2752,7 @@ export function IssueDetail() {
   const canApplyTreeControl =
     Boolean(treeControlPreview)
     && !treeControlPreviewLoading
-    && (treeControlMode !== "cancel" || (treeControlReason.trim().length > 0 && treeControlCancelConfirmed));
+    && (treeControlMode !== "cancel" || treeControlCancelConfirmed);
   const attachmentUploadButton = (
     <>
       <input
@@ -2836,6 +2890,7 @@ export function IssueDetail() {
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <StatusIcon
             status={issue.status}
+            blockerAttention={issue.blockerAttention}
             onChange={(status) => updateIssue.mutate({ status })}
           />
           <PriorityIcon
@@ -2863,6 +2918,20 @@ export function IssueDetail() {
               Routine
             </Link>
           )}
+
+          {issue.productivityReview ? (
+            <ProductivityReviewBadge review={issue.productivityReview} />
+          ) : null}
+
+          {issue.originKind === "issue_productivity_review" ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300 shrink-0"
+              title="This task is a productivity review."
+            >
+              <Eye className="h-3 w-3" />
+              Productivity review
+            </span>
+          ) : null}
 
           {issue.projectId ? (
             <Link
@@ -3065,6 +3134,7 @@ export function IssueDetail() {
           className="text-[15px] leading-7 text-foreground"
           placeholder="Add a description..."
           multiline
+          foldable
           mentions={mentionOptions}
           imageUploadHandler={async (file) => {
             const attachment = await uploadAttachment.mutateAsync(file);
@@ -3133,9 +3203,12 @@ export function IssueDetail() {
             projectId={issue.projectId ?? undefined}
             viewStateKey={`paperclip:issue-detail:${issue.id}:subissues-view`}
             issueLinkState={resolvedIssueDetailState ?? location.state}
-            searchFilters={{ parentId: issue.id }}
+            searchFilters={{ descendantOf: issue.id, includeBlockedBy: true }}
+            searchWithinLoadedIssues
             baseCreateIssueDefaults={buildSubIssueDefaultsForViewer(issue, currentUserId)}
             createIssueLabel="Sub-issue"
+            defaultSortField="workflow"
+            showProgressSummary
             onUpdateIssue={handleChildIssueUpdate}
           />
         </div>
@@ -3349,12 +3422,14 @@ export function IssueDetail() {
               issueStatus={issue.status}
               executionRunId={issue.executionRunId ?? null}
               blockedBy={issue.blockedBy ?? []}
+              blockerAttention={issue.blockerAttention ?? null}
               comments={threadComments}
               locallyQueuedCommentRunIds={locallyQueuedCommentRunIds}
               interactions={interactions}
               hasOlderComments={hasOlderComments}
               commentsLoadingOlder={commentsLoadingOlder}
               onLoadOlderComments={loadOlderComments}
+              onRefreshLatestComments={refetchLatestComments}
               composerRef={commentComposerRef}
               feedbackVotes={feedbackVotes}
               feedbackDataSharingPreference={feedbackDataSharingPreference}
@@ -3390,6 +3465,7 @@ export function IssueDetail() {
           {detailTab === "activity" ? (
             <IssueDetailActivityTab
               issueId={issue.id}
+              companyId={issue.companyId}
               issueStatus={issue.status}
               childIssues={childIssues}
               agentMap={agentMap}
@@ -3442,7 +3518,7 @@ export function IssueDetail() {
 
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">
-                {treeControlMode === "cancel" ? "Reason (required)" : "Reason (optional)"}
+                Reason (optional)
               </label>
               <Textarea
                 value={treeControlReason}
