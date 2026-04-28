@@ -1740,11 +1740,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
 
       const dailyCount = await countDailyContinuationRuns(db, issue.companyId, issue.id, issue.updatedAt, recoverySettings);
       if (dailyCount >= recoverySettings.continuationDailyCap) {
-        const auditRunId = latestRun?.id ?? issue.checkoutRunId ?? issue.executionRunId ?? null;
-        if (!auditRunId) {
-          result.skipped += 1;
-          continue;
-        }
+        const auditRunId = (latestRun?.id ?? issue.checkoutRunId ?? issue.executionRunId)!;
         const windowStart = new Date(Date.now() - recoverySettings.continuationDailyWindowHours * 60 * 60 * 1000);
         const windowDescription =
           issue.updatedAt > windowStart

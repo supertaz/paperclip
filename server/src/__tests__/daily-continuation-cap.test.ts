@@ -68,6 +68,7 @@ describeEmbeddedPostgres("daily continuation cap", () => {
   }, 30_000);
 
   afterEach(async () => {
+    await db.delete(instanceSettings);
     await db.execute(sql.raw(`TRUNCATE TABLE "companies" CASCADE`));
   });
 
