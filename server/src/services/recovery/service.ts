@@ -1740,8 +1740,14 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
 
       const dailyCount = await countDailyContinuationRuns(db, issue.companyId, issue.id, issue.updatedAt, recoverySettings);
       if (dailyCount >= recoverySettings.continuationDailyCap) {
+        const auditRunId = latestRun?.id ?? issue.checkoutRunId ?? issue.executionRunId ?? null;
+        if (!auditRunId) {
+          result.skipped += 1;
+          continue;
+        }
+        const windowStart = new Date(Date.now() - recoverySettings.continuationDailyWindowHours * 60 * 60 * 1000);
         const windowDescription =
-          issue.updatedAt > new Date(Date.now() - recoverySettings.continuationDailyWindowHours * 60 * 60 * 1000)
+          issue.updatedAt > windowStart
             ? "since the last status change"
             : `in the last ${recoverySettings.continuationDailyWindowHours} hours`;
         const updated = await escalateStrandedAssignedIssue({
@@ -1752,23 +1758,20 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             `Paperclip queued ${dailyCount} continuation runs for this issue ${windowDescription} without resolving it. ` +
             "Moving it to `blocked` so it is visible for intervention.",
         });
-        const auditRunId = latestRun?.id ?? issue.checkoutRunId ?? issue.executionRunId ?? null;
         if (updated) {
-          if (auditRunId) {
-            await db.insert(heartbeatRunWatchdogDecisions).values({
-              companyId: issue.companyId,
-              runId: auditRunId,
-              evaluationIssueId: issue.id,
-              decision: "rate_limited",
-              snoozedUntil: null,
-              reason:
-                `Continuation cap of ${recoverySettings.continuationDailyCap} reached ` +
-                `(${dailyCount} runs ${windowDescription}).`,
-              createdByAgentId: null,
-              createdByUserId: null,
-              createdByRunId: null,
-            });
-          }
+          await db.insert(heartbeatRunWatchdogDecisions).values({
+            companyId: issue.companyId,
+            runId: auditRunId,
+            evaluationIssueId: issue.id,
+            decision: "rate_limited",
+            snoozedUntil: null,
+            reason:
+              `Continuation cap of ${recoverySettings.continuationDailyCap} reached ` +
+              `(${dailyCount} runs ${windowDescription}).`,
+            createdByAgentId: null,
+            createdByUserId: null,
+            createdByRunId: null,
+          });
           result.dailyCapTripped += 1;
           result.escalated += 1;
           result.issueIds.push(issue.id);
