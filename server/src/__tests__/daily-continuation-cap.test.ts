@@ -78,7 +78,7 @@ describeEmbeddedPostgres("daily continuation cap", () => {
   // Issue created well before the run window so updatedAt guard doesn't filter out runs.
   const ISSUE_CREATED_AT = new Date(Date.now() - 25 * 60 * 60 * 1000);
 
-  async function seedStrandedIssueWithDailyRuns(runCount: number) {
+  async function seedStrandedIssueWithDailyRuns(runCount: number, breakConsecutiveTail = false) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issueId = randomUUID();
@@ -135,11 +135,33 @@ describeEmbeddedPostgres("daily continuation cap", () => {
       });
     }
 
+    if (breakConsecutiveTail) {
+      // Keep this fixture focused on the 24h aggregate cap when combined with
+      // the stricter consecutive-continuation cap.
+      const createdAt = new Date(Date.now() - 5_000);
+      await db.insert(heartbeatRuns).values({
+        id: randomUUID(),
+        companyId,
+        agentId,
+        status: "succeeded",
+        invocationSource: "automation",
+        triggerDetail: "system",
+        startedAt: createdAt,
+        finishedAt: new Date(createdAt.getTime() + 1_000),
+        createdAt,
+        contextSnapshot: {
+          issueId,
+          retryReason: "assignment_recovery",
+        },
+        logBytes: 0,
+      });
+    }
+
     return { companyId, agentId, issueId };
   }
 
   it("escalates to blocked and inserts watchdog decision after 24 continuation runs in 24h", async () => {
-    const { issueId, companyId } = await seedStrandedIssueWithDailyRuns(24);
+    const { issueId, companyId } = await seedStrandedIssueWithDailyRuns(24, true);
     const enqueueWakeup = vi.fn();
     const recovery = recoveryService(db, { enqueueWakeup });
 
@@ -167,7 +189,7 @@ describeEmbeddedPostgres("daily continuation cap", () => {
   });
 
   it("re-queues continuation when fewer than 24 runs exist in the window", async () => {
-    const { issueId } = await seedStrandedIssueWithDailyRuns(23);
+    const { issueId } = await seedStrandedIssueWithDailyRuns(23, true);
     const enqueueWakeup = vi.fn().mockResolvedValue({ id: randomUUID() });
     const recovery = recoveryService(db, { enqueueWakeup });
 
