@@ -449,9 +449,11 @@ function InstanceNumberField({
   const inputId = useId();
   const errorId = `${inputId}-error`;
   const [draft, setDraft] = useState<string>(String(value));
-  const parsedDraft = parseInt(draft, 10);
+  const trimmedDraft = draft.trim();
+  const parsedDraft = Number(trimmedDraft);
   const invalidDraft =
-    draft.trim() === "" ||
+    trimmedDraft === "" ||
+    !/^\d+$/.test(trimmedDraft) ||
     Number.isNaN(parsedDraft) ||
     parsedDraft < min ||
     parsedDraft > max;
@@ -479,6 +481,7 @@ function InstanceNumberField({
         type="number"
         min={min}
         max={max}
+        step={1}
         value={draft}
         disabled={disabled}
         aria-invalid={invalidDraft}
