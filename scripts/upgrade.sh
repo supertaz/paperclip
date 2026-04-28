@@ -147,6 +147,8 @@ COMPANY_ID_FILE="$STATE_DIR/company-id"
 TARGET_REF_FILE="$STATE_DIR/target-ref"
 INTEGRATION_MANIFEST_FILE="$STATE_DIR/integration-manifest.json"
 INTEGRATION_CONFLICT_BASE_FILE="$STATE_DIR/integration-conflict-base"
+INTEGRATION_MAIN_CONFLICTS_FILE="$STATE_DIR/integration-main-conflicts.json"
+INTEGRATION_COMPOSE_CONFLICTS_FILE="$STATE_DIR/integration-compose-conflicts.json"
 INTEGRATION_PREVIOUS_MANIFEST_FILE="$STATE_DIR/integration-previous-manifest.json"
 
 mkdir -p "$STATE_DIR"
@@ -335,6 +337,74 @@ fetch_integration_pr_refs() {
   done
 }
 
+record_integration_conflict() {
+  local output="$1"
+  local number="$2"
+  local title="$3"
+  local upstream_commit="$4"
+  local pr_base="$5"
+  local files_json
+  files_json=$(git -C "$BUILD_DIR" diff --name-only --diff-filter=U \
+    | jq -R -s 'split("\n") | map(select(length > 0))')
+  jq -n \
+    --argjson number "$number" \
+    --arg title "$title" \
+    --arg upstreamSha "$upstream_commit" \
+    --arg prBase "$pr_base" \
+    --argjson files "$files_json" \
+    '{number: $number, title: $title, upstreamSha: $upstreamSha, prBase: $prBase, files: $files}' \
+    >> "$output"
+}
+
+write_json_array_from_jsonl() {
+  local jsonl="$1"
+  local output="$2"
+  if [ -s "$jsonl" ]; then
+    jq -s '.' "$jsonl" > "$output"
+  else
+    printf '[]\n' > "$output"
+  fi
+}
+
+finalize_integration_compose_conflicts() {
+  write_json_array_from_jsonl "$STATE_DIR/integration-compose-conflicts.jsonl" "$INTEGRATION_COMPOSE_CONFLICTS_FILE"
+  rm -f "$STATE_DIR/integration-compose-conflicts.jsonl"
+}
+
+report_pr_main_conflicts() {
+  local upstream_commit="$1"
+  local conflicts_jsonl="$STATE_DIR/integration-main-conflicts.jsonl"
+  local number title pr_ref pr_base count
+
+  : > "$conflicts_jsonl"
+  log "Integration: checking tracked PRs for direct conflicts with $(git -C "$REPO_DIR" rev-parse --short "$upstream_commit")"
+  while IFS=$'\t' read -r number title; do
+    [ -z "$number" ] && continue
+    pr_ref="refs/remotes/paperclip-integration/pr-$number"
+    pr_base=$(git -C "$REPO_DIR" merge-base "$UPSTREAM/$UPSTREAM_BRANCH" "$pr_ref")
+
+    if [ -d "$BUILD_DIR" ]; then
+      git -C "$REPO_DIR" worktree remove --force "$BUILD_DIR" 2>/dev/null || rm -rf "$BUILD_DIR"
+    fi
+    git -C "$REPO_DIR" worktree add --detach "$BUILD_DIR" "$upstream_commit" 2>>"$LOG_FILE"
+
+    if ! git -C "$BUILD_DIR" merge --no-ff --no-edit "$pr_ref" 2>>"$LOG_FILE"; then
+      log "WARN: PR #$number conflicts with $UPSTREAM/$UPSTREAM_BRANCH - $title"
+      record_integration_conflict "$conflicts_jsonl" "$number" "$title" "$upstream_commit" "$pr_base"
+      git -C "$BUILD_DIR" merge --abort 2>>"$LOG_FILE" || true
+    fi
+  done < <(jq -r '.[] | [.number, (.title | gsub("\t"; " "))] | @tsv' "$STATE_DIR/integration-prs.json")
+
+  write_json_array_from_jsonl "$conflicts_jsonl" "$INTEGRATION_MAIN_CONFLICTS_FILE"
+  rm -f "$conflicts_jsonl"
+  count=$(jq 'length' "$INTEGRATION_MAIN_CONFLICTS_FILE")
+  if [ "$count" != "0" ]; then
+    log "WARN: $count tracked PR(s) conflict directly with $UPSTREAM/$UPSTREAM_BRANCH; see $INTEGRATION_MAIN_CONFLICTS_FILE"
+  else
+    log "Integration: no tracked PRs conflict directly with $UPSTREAM/$UPSTREAM_BRANCH"
+  fi
+}
+
 compose_integration_candidate() {
   local upstream_commit="$1"
   local number title pr_ref pr_base patch_file
@@ -360,6 +430,7 @@ compose_integration_candidate() {
     if ! git -C "$BUILD_DIR" apply --3way --index "$patch_file" 2>>"$LOG_FILE"; then
       log "ERROR: Integration patch conflict while applying PR #$number"
       echo "$pr_base" > "$INTEGRATION_CONFLICT_BASE_FILE"
+      record_integration_conflict "$STATE_DIR/integration-compose-conflicts.jsonl" "$number" "$title" "$upstream_commit" "$pr_base"
       git -C "$BUILD_DIR" reset --hard HEAD 2>>"$LOG_FILE" || true
       rm -f "$patch_file"
       return 1
@@ -476,7 +547,8 @@ prepare_integration_target() {
 
   latest_upstream=$(git -C "$REPO_DIR" rev-parse "$UPSTREAM/$UPSTREAM_BRANCH")
   previous_upstream=$(find_last_integrated_upstream_sha)
-  rm -f "$INTEGRATION_CONFLICT_BASE_FILE"
+  rm -f "$INTEGRATION_CONFLICT_BASE_FILE" "$STATE_DIR/integration-compose-conflicts.jsonl"
+  report_pr_main_conflicts "$latest_upstream"
 
   log "Integration: composing latest upstream $(git -C "$REPO_DIR" rev-parse --short "$latest_upstream") with $(jq 'length' "$STATE_DIR/integration-prs.json") PR(s)"
   if compose_integration_candidate "$latest_upstream"; then
@@ -489,6 +561,7 @@ prepare_integration_target() {
       fi
       if [ -z "$previous_upstream" ]; then
         log "ERROR: Integration composition failed and no previous upstream checkpoint exists"
+        finalize_integration_compose_conflicts
         full_cleanup
         exit 1
       fi
@@ -513,6 +586,7 @@ prepare_integration_target() {
       fi
 
       log "ERROR: Previously integrated upstream commit no longer composes with tracked PRs"
+      finalize_integration_compose_conflicts
       full_cleanup
       exit 1
     done
@@ -533,6 +607,8 @@ prepare_integration_target() {
     fi
     compose_integration_candidate "$best_upstream"
   fi
+
+  finalize_integration_compose_conflicts
 
   TARGET_REF=$(git -C "$BUILD_DIR" rev-parse HEAD)
   echo "$TARGET_REF" > "$TARGET_REF_FILE"
@@ -706,12 +782,18 @@ full_cleanup() {
   # API is down mid-swap. It is refreshed on every fresh upgrade start.
   local saved_company_id=""
   local saved_integration_manifest=""
+  local saved_main_conflicts=""
+  local saved_compose_conflicts=""
   [ -f "$COMPANY_ID_FILE" ] && saved_company_id=$(cat "$COMPANY_ID_FILE")
   [ -f "$INTEGRATION_MANIFEST_FILE" ] && saved_integration_manifest=$(cat "$INTEGRATION_MANIFEST_FILE")
+  [ -f "$INTEGRATION_MAIN_CONFLICTS_FILE" ] && saved_main_conflicts=$(cat "$INTEGRATION_MAIN_CONFLICTS_FILE")
+  [ -f "$INTEGRATION_COMPOSE_CONFLICTS_FILE" ] && saved_compose_conflicts=$(cat "$INTEGRATION_COMPOSE_CONFLICTS_FILE")
   rm -rf "$STATE_DIR"
   mkdir -p "$STATE_DIR"
   [ -n "$saved_company_id" ] && echo "$saved_company_id" > "$COMPANY_ID_FILE"
   [ -n "$saved_integration_manifest" ] && echo "$saved_integration_manifest" > "$INTEGRATION_MANIFEST_FILE"
+  [ -n "$saved_main_conflicts" ] && echo "$saved_main_conflicts" > "$INTEGRATION_MAIN_CONFLICTS_FILE"
+  [ -n "$saved_compose_conflicts" ] && echo "$saved_compose_conflicts" > "$INTEGRATION_COMPOSE_CONFLICTS_FILE"
   if [ -d "$BUILD_DIR" ]; then
     git -C "$REPO_DIR" worktree remove --force "$BUILD_DIR" 2>/dev/null || rm -rf "$BUILD_DIR"
   fi
@@ -868,6 +950,14 @@ case "${1:-}" in
     if [ -f "$INTEGRATION_MANIFEST_FILE" ]; then
       echo "Integration manifest: $INTEGRATION_MANIFEST_FILE"
       jq -r '"Integration upstream: \(.upstream.sha)\nIntegration PRs: \([.prs[].number] | join(", "))"' "$INTEGRATION_MANIFEST_FILE" 2>/dev/null || true
+    fi
+    if [ -f "$INTEGRATION_MAIN_CONFLICTS_FILE" ]; then
+      echo "Integration main conflicts: $INTEGRATION_MAIN_CONFLICTS_FILE"
+      jq -r '"Integration main conflict PRs: \([.[].number] | join(", "))"' "$INTEGRATION_MAIN_CONFLICTS_FILE" 2>/dev/null || true
+    fi
+    if [ -f "$INTEGRATION_COMPOSE_CONFLICTS_FILE" ]; then
+      echo "Integration compose conflicts: $INTEGRATION_COMPOSE_CONFLICTS_FILE"
+      jq -r '"Integration compose conflict PRs: \([.[].number] | join(", "))"' "$INTEGRATION_COMPOSE_CONFLICTS_FILE" 2>/dev/null || true
     fi
     [ -d "$BUILD_DIR" ] && echo "Build dir: exists ($(git -C "$BUILD_DIR" rev-parse --short HEAD 2>/dev/null || echo 'unknown'))"
     exit 0
