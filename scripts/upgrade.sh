@@ -146,6 +146,7 @@ PULSE_FILE="$STATE_DIR/pulse"
 COMPANY_ID_FILE="$STATE_DIR/company-id"
 TARGET_REF_FILE="$STATE_DIR/target-ref"
 INTEGRATION_MANIFEST_FILE="$STATE_DIR/integration-manifest.json"
+INTEGRATION_CONFLICT_BASE_FILE="$STATE_DIR/integration-conflict-base"
 INTEGRATION_PREVIOUS_MANIFEST_FILE="$STATE_DIR/integration-previous-manifest.json"
 
 mkdir -p "$STATE_DIR"
@@ -358,6 +359,7 @@ compose_integration_candidate() {
     log "Integration: applying PR #$number - $title"
     if ! git -C "$BUILD_DIR" apply --3way --index "$patch_file" 2>>"$LOG_FILE"; then
       log "ERROR: Integration patch conflict while applying PR #$number"
+      echo "$pr_base" > "$INTEGRATION_CONFLICT_BASE_FILE"
       git -C "$BUILD_DIR" reset --hard HEAD 2>>"$LOG_FILE" || true
       rm -f "$patch_file"
       return 1
@@ -474,19 +476,23 @@ prepare_integration_target() {
 
   latest_upstream=$(git -C "$REPO_DIR" rev-parse "$UPSTREAM/$UPSTREAM_BRANCH")
   previous_upstream=$(find_last_integrated_upstream_sha)
+  rm -f "$INTEGRATION_CONFLICT_BASE_FILE"
 
   log "Integration: composing latest upstream $(git -C "$REPO_DIR" rev-parse --short "$latest_upstream") with $(jq 'length' "$STATE_DIR/integration-prs.json") PR(s)"
   if compose_integration_candidate "$latest_upstream"; then
     best_upstream="$latest_upstream"
   else
     if [ -z "$previous_upstream" ]; then
-      previous_upstream=$(find_initial_integration_base)
+      previous_upstream=$(cat "$INTEGRATION_CONFLICT_BASE_FILE" 2>/dev/null || true)
+      if [ -z "$previous_upstream" ]; then
+        previous_upstream=$(find_initial_integration_base)
+      fi
       if [ -z "$previous_upstream" ]; then
         log "ERROR: Integration composition failed and no previous upstream checkpoint exists"
         full_cleanup
         exit 1
       fi
-      log "Integration: no prior checkpoint; using PR octopus merge-base $(git -C "$REPO_DIR" rev-parse --short "$previous_upstream")"
+      log "Integration: no prior checkpoint; using conflict PR merge-base $(git -C "$REPO_DIR" rev-parse --short "$previous_upstream")"
     fi
     log "Integration: latest upstream conflicted; advancing one upstream commit at a time from $(git -C "$REPO_DIR" rev-parse --short "$previous_upstream")"
     best_upstream=""
