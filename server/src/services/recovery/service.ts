@@ -118,6 +118,9 @@ export function didAutomaticRecoveryExhaust(
 
   const latestContext = parseObject(latestRun.contextSnapshot);
   const latestRetryReason = readNonEmptyString(latestContext.retryReason);
+  if (expectedRetryReason === "issue_continuation_needed" && latestRun.status === "succeeded") {
+    return false;
+  }
   // A succeeded recovery run is also considered exhausted: call sites verify there is no
   // active execution path before reaching this check, so a run that exited successfully
   // without re-establishing one left the issue stranded and should trigger escalation.
