@@ -8,6 +8,7 @@ import {
   createDb,
   heartbeatRuns,
   heartbeatRunWatchdogDecisions,
+  instanceSettings,
   issues,
 } from "@paperclipai/db";
 import {
@@ -209,5 +210,53 @@ describeEmbeddedPostgres("daily continuation cap", () => {
       expect.anything(),
       expect.objectContaining({ reason: "issue_continuation_needed" }),
     );
+  });
+
+  it("uses configured continuation cap and window", async () => {
+    const { issueId, companyId } = await seedStrandedIssueWithDailyRuns(10, true);
+    await db
+      .insert(instanceSettings)
+      .values({
+        singletonKey: "default",
+        general: {
+          recoveryProtection: {
+            continuationDailyCap: 10,
+            continuationDailyWindowHours: 24,
+          },
+        },
+        experimental: {},
+      })
+      .onConflictDoUpdate({
+        target: [instanceSettings.singletonKey],
+        set: {
+          general: {
+            recoveryProtection: {
+              continuationDailyCap: 10,
+              continuationDailyWindowHours: 24,
+            },
+          },
+          experimental: {},
+        },
+      });
+    const enqueueWakeup = vi.fn();
+    const recovery = recoveryService(db, { enqueueWakeup });
+
+    const result = await recovery.reconcileStrandedAssignedIssues();
+
+    expect(result.escalated).toBe(1);
+    expect(result.dailyCapTripped).toBe(1);
+
+    const decisions = await db
+      .select()
+      .from(heartbeatRunWatchdogDecisions)
+      .where(eq(heartbeatRunWatchdogDecisions.companyId, companyId));
+    expect(decisions[0]?.reason).toContain("Continuation cap of 10 reached");
+    expect(enqueueWakeup).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reason: "issue_continuation_needed" }),
+    );
+
+    const [updated] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(updated?.status).toBe("blocked");
   });
 });

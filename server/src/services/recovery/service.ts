@@ -2,10 +2,12 @@ import { and, asc, count, desc, eq, gt, inArray, isNull, notInArray, sql } from 
 import type { Db } from "@paperclipai/db";
 import {
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
+  DEFAULT_RECOVERY_PROTECTION_SETTINGS,
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   MIN_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
   type IssueGraphLivenessAutoRecoveryPreview,
   type IssueGraphLivenessAutoRecoveryPreviewItem,
+  type RecoveryProtectionSettings,
 } from "@paperclipai/shared";
 import {
   agents,
@@ -47,8 +49,6 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js"
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 const ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_MIN_STALE_MS = 24 * 60 * 60 * 1000;
-const ISSUE_CONTINUATION_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
-const ISSUE_CONTINUATION_DAILY_CAP = 24;
 export const ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS = 60 * 60 * 1000;
 export const ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS = 4 * 60 * 60 * 1000;
 export const ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS = 30 * 60 * 1000;
@@ -107,8 +107,9 @@ async function countDailyContinuationRuns(
   companyId: string,
   issueId: string,
   since: Date,
+  settings: RecoveryProtectionSettings,
 ): Promise<number> {
-  const windowStart = new Date(Date.now() - ISSUE_CONTINUATION_DAILY_WINDOW_MS);
+  const windowStart = new Date(Date.now() - settings.continuationDailyWindowHours * 60 * 60 * 1000);
   const effectiveSince = windowStart > since ? windowStart : since;
   const [row] = await db
     .select({ total: count() })
@@ -1582,6 +1583,8 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }
 
   async function reconcileStrandedAssignedIssues() {
+    const recoverySettings =
+      (await instanceSettings.getGeneral()).recoveryProtection ?? DEFAULT_RECOVERY_PROTECTION_SETTINGS;
     const candidates = await db
       .select()
       .from(issues)
@@ -1736,11 +1739,12 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
 
-      const dailyCount = await countDailyContinuationRuns(db, issue.companyId, issue.id, issue.updatedAt);
-      if (dailyCount >= ISSUE_CONTINUATION_DAILY_CAP) {
-        const windowDescription = issue.updatedAt > new Date(Date.now() - ISSUE_CONTINUATION_DAILY_WINDOW_MS)
-          ? "since the last status change"
-          : "in the last 24 hours";
+      const dailyCount = await countDailyContinuationRuns(db, issue.companyId, issue.id, issue.updatedAt, recoverySettings);
+      if (dailyCount >= recoverySettings.continuationDailyCap) {
+        const windowDescription =
+          issue.updatedAt > new Date(Date.now() - recoverySettings.continuationDailyWindowHours * 60 * 60 * 1000)
+            ? "since the last status change"
+            : `in the last ${recoverySettings.continuationDailyWindowHours} hours`;
         const updated = await escalateStrandedAssignedIssue({
           issue,
           previousStatus: "in_progress",
@@ -1757,7 +1761,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             evaluationIssueId: issue.id,
             decision: "rate_limited",
             snoozedUntil: null,
-            reason: `Daily continuation cap of ${ISSUE_CONTINUATION_DAILY_CAP} reached (${dailyCount} runs ${windowDescription}).`,
+            reason:
+              `Continuation cap of ${recoverySettings.continuationDailyCap} reached ` +
+              `(${dailyCount} runs ${windowDescription}).`,
             createdByAgentId: null,
             createdByUserId: null,
             createdByRunId: null,
@@ -1770,6 +1776,8 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         } else {
           result.skipped += 1;
         }
+        continue;
+      }
 
       if (await isInvocationBudgetBlocked(issue, agentId)) {
         result.skipped += 1;
