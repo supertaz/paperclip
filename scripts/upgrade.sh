@@ -453,7 +453,7 @@ compose_integration_candidate() {
 
 find_last_integrated_upstream_sha() {
   if [ -f "$INTEGRATION_MANIFEST_FILE" ]; then
-    jq -r '.upstreamSha // empty' "$INTEGRATION_MANIFEST_FILE"
+    jq -r '.upstream.sha // .upstreamSha // empty' "$INTEGRATION_MANIFEST_FILE"
     return
   fi
   if git -C "$REPO_DIR" rev-parse --verify "$INTEGRATION_FORK_REMOTE/$INTEGRATION_BRANCH" >/dev/null 2>&1; then
