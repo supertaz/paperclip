@@ -336,7 +336,7 @@ fetch_integration_pr_refs() {
 
 compose_integration_candidate() {
   local upstream_commit="$1"
-  local number title pr_ref
+  local number title pr_ref pr_base patch_file
 
   if [ -d "$BUILD_DIR" ]; then
     git -C "$REPO_DIR" worktree remove --force "$BUILD_DIR" 2>/dev/null || rm -rf "$BUILD_DIR"
@@ -346,12 +346,24 @@ compose_integration_candidate() {
   while IFS=$'\t' read -r number title; do
     [ -z "$number" ] && continue
     pr_ref="refs/remotes/paperclip-integration/pr-$number"
-    log "Integration: merging PR #$number - $title"
-    if ! git -C "$BUILD_DIR" merge --no-ff --no-edit "$pr_ref" 2>>"$LOG_FILE"; then
-      log "ERROR: Integration merge conflict while merging PR #$number"
-      git -C "$BUILD_DIR" merge --abort 2>>"$LOG_FILE" || true
+    pr_base=$(git -C "$REPO_DIR" merge-base "$UPSTREAM/$UPSTREAM_BRANCH" "$pr_ref")
+    patch_file="$STATE_DIR/integration-pr-$number.patch"
+    git -C "$REPO_DIR" diff --binary --full-index "$pr_base" "$pr_ref" > "$patch_file"
+    if [ ! -s "$patch_file" ]; then
+      log "Integration: skipping PR #$number - patch is empty against upstream"
+      rm -f "$patch_file"
+      continue
+    fi
+
+    log "Integration: applying PR #$number - $title"
+    if ! git -C "$BUILD_DIR" apply --3way --index "$patch_file" 2>>"$LOG_FILE"; then
+      log "ERROR: Integration patch conflict while applying PR #$number"
+      git -C "$BUILD_DIR" reset --hard HEAD 2>>"$LOG_FILE" || true
+      rm -f "$patch_file"
       return 1
     fi
+    rm -f "$patch_file"
+    git -C "$BUILD_DIR" commit -m "Integrate PR #$number: $title" 2>>"$LOG_FILE"
   done < <(jq -r '.[] | [.number, (.title | gsub("\t"; " "))] | @tsv' "$STATE_DIR/integration-prs.json")
 
   return 0
