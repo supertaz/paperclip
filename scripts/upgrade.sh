@@ -462,7 +462,7 @@ EOF
 }
 
 prepare_integration_target() {
-  local latest_upstream previous_upstream best_upstream candidate final_manifest
+  local latest_upstream previous_upstream best_upstream candidate final_manifest next_base
 
   ensure_integration_config
   log "Integration: fetching $UPSTREAM/$UPSTREAM_BRANCH and $INTEGRATION_FORK_REMOTE/$INTEGRATION_BRANCH"
@@ -496,13 +496,26 @@ prepare_integration_target() {
     fi
     log "Integration: latest upstream conflicted; advancing one upstream commit at a time from $(git -C "$REPO_DIR" rev-parse --short "$previous_upstream")"
     best_upstream=""
-    if compose_integration_candidate "$previous_upstream"; then
-      best_upstream="$previous_upstream"
-    else
+    while true; do
+      rm -f "$INTEGRATION_CONFLICT_BASE_FILE"
+      if compose_integration_candidate "$previous_upstream"; then
+        best_upstream="$previous_upstream"
+        break
+      fi
+
+      next_base=$(cat "$INTEGRATION_CONFLICT_BASE_FILE" 2>/dev/null || true)
+      if [ -n "$next_base" ] \
+        && [ "$next_base" != "$previous_upstream" ] \
+        && git -C "$REPO_DIR" merge-base --is-ancestor "$previous_upstream" "$next_base"; then
+        log "Integration: fallback base too old for a tracked PR; retrying from $(git -C "$REPO_DIR" rev-parse --short "$next_base")"
+        previous_upstream="$next_base"
+        continue
+      fi
+
       log "ERROR: Previously integrated upstream commit no longer composes with tracked PRs"
       full_cleanup
       exit 1
-    fi
+    done
     while IFS= read -r candidate; do
       log "Integration: testing upstream commit $(git -C "$REPO_DIR" rev-parse --short "$candidate")"
       if compose_integration_candidate "$candidate"; then
