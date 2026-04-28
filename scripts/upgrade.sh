@@ -630,8 +630,10 @@ save_heartbeat_state() {
 }
 
 quiesce_agents() {
+  local agent_id
   log "Quiescing all agents (disabling heartbeats and on-demand wakes only)..."
   for agent_id in $(jq -r '.[] | select(.heartbeat.enabled == true or .heartbeat.wakeOnDemand == true) | .id' "$HEARTBEAT_STATE_FILE"); do
+    local agent_name saved_rc saved_hb quiesced_hb quiesced_rc
     agent_name=$(jq -r --arg id "$agent_id" '.[] | select(.id == $id) | .name' "$HEARTBEAT_STATE_FILE")
     # Patch the full runtimeConfig with only enabled+wakeOnDemand overridden so
     # intervalSec, maxConcurrentRuns, and all other runtimeConfig keys survive.
@@ -648,12 +650,14 @@ quiesce_agents() {
 }
 
 restore_heartbeats() {
+  local agent_id
   if [ ! -f "$HEARTBEAT_STATE_FILE" ]; then
     log "WARN: No heartbeat state file found, cannot restore"
     return
   fi
   log "Restoring full agent runtimeConfig (including heartbeat.intervalSec)..."
   for agent_id in $(jq -r '.[] | select(.heartbeat.enabled == true or .heartbeat.wakeOnDemand == true) | .id' "$HEARTBEAT_STATE_FILE"); do
+    local agent_name saved_rc
     agent_name=$(jq -r --arg id "$agent_id" '.[] | select(.id == $id) | .name' "$HEARTBEAT_STATE_FILE")
     saved_rc=$(jq -c --arg id "$agent_id" '.[] | select(.id == $id) | .runtimeConfig // {}' "$HEARTBEAT_STATE_FILE")
     api_curl -X PATCH "$API_URL/api/agents/$agent_id" \

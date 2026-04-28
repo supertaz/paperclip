@@ -1,7 +1,11 @@
+node_modules
 node_modules/
+**/node_modules
+**/node_modules/
 dist/
-.env*
-!.env.example
+ui/storybook-static/
+.env
+.env.upgrade-sh
 *.tsbuildinfo
 drizzle/meta/
 .vite/
@@ -33,6 +37,7 @@ server/src/**/*.d.ts
 server/src/**/*.d.ts.map
 tmp/
 feedback-export-*
+diagnostics/
 
 # Editor / tool temp files
 *.tmp
