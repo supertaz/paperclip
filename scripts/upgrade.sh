@@ -380,7 +380,7 @@ find_last_integrated_upstream_sha() {
 }
 
 find_initial_integration_base() {
-  local number ref base best
+  local number ref base best=""
   while IFS= read -r number; do
     [ -z "$number" ] && continue
     ref="refs/remotes/paperclip-integration/pr-$number"
