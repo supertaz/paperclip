@@ -8,6 +8,7 @@ import {
   type IssueGraphLivenessAutoRecoveryPreviewItem,
 } from "@paperclipai/shared";
 import {
+  activityLog,
   agents,
   agentWakeupRequests,
   approvals,
@@ -15,6 +16,7 @@ import {
   heartbeatRunEvents,
   heartbeatRunWatchdogDecisions,
   heartbeatRuns,
+  issueComments,
   issueApprovals,
   issueRelations,
   issueThreadInteractions,
@@ -379,66 +381,82 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       `issue in the last ${windowMinutes} minutes. ` +
       "Moving the issue to `blocked` and pausing the agent to stop the loop.";
 
+    const now = new Date();
+    const auditRunId = input.latestRun?.id ?? input.issue.checkoutRunId ?? input.issue.executionRunId ?? null;
+    const commentBody = redactCurrentUserText(
+      `${comment}\n\n- Recovery issue: none — rate-limit trip requires direct operator intervention.\n- Next action: inspect the recovery run history, fix the underlying cause, then unblock the issue and unpause the agent.`,
+      { enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs },
+    );
+
     // Block the issue directly — skip the normal escalation path to avoid
     // creating a recovery sub-issue (which would itself enqueue a wake and
     // risk re-entering the loop). This is a hard stop: human intervention is
     // required before either the issue or the agent can resume.
-    const updated = await issuesSvc.update(input.issue.id, {
-      status: "blocked",
-    });
-
-    if (updated) {
-      await issuesSvc.addComment(
-        input.issue.id,
-        `${comment}\n\n- Recovery issue: none — rate-limit trip requires direct operator intervention.\n- Next action: inspect the recovery run history, fix the underlying cause, then unblock the issue and unpause the agent.`,
-        {},
-      );
-      await logActivity(db, {
-        companyId: input.issue.companyId,
-        actorType: "system",
-        actorId: "system",
-        agentId: null,
-        runId: null,
-        action: "issue.updated",
-        entityType: "issue",
-        entityId: input.issue.id,
-        details: {
-          identifier: input.issue.identifier,
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(issues)
+        .set({
           status: "blocked",
-          previousStatus: input.issue.status,
-          source: "recovery.per_issue_rate_limit",
-          enqueueCount: input.enqueueCount,
-          latestRunId: input.latestRun?.id ?? null,
-        },
-      });
-    }
+          updatedAt: now,
+        })
+        .where(eq(issues.id, input.issue.id))
+        .returning();
 
-    const [pausedAgent] = await db
-      .update(agents)
-      .set({
-        status: "paused",
-        pauseReason: comment,
-        pausedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(agents.id, input.agentId),
-          notInArray(agents.status, ["paused", "terminated"]),
-        ),
-      )
-      .returning();
-    const auditRunId = input.latestRun?.id ?? input.issue.checkoutRunId ?? input.issue.executionRunId ?? null;
-    if (auditRunId) {
-      await db.insert(heartbeatRunWatchdogDecisions).values({
-        companyId: input.issue.companyId,
-        runId: auditRunId,
-        evaluationIssueId: input.issue.id,
-        decision: "rate_limited",
-        reason: comment,
-      });
-    }
-    return { escalated: Boolean(updated), paused: Boolean(pausedAgent) };
+      if (updated) {
+        await tx.insert(issueComments).values({
+          companyId: input.issue.companyId,
+          issueId: input.issue.id,
+          body: commentBody,
+          updatedAt: now,
+        });
+        await tx.insert(activityLog).values({
+          companyId: input.issue.companyId,
+          actorType: "system",
+          actorId: "system",
+          agentId: null,
+          runId: null,
+          action: "issue.updated",
+          entityType: "issue",
+          entityId: input.issue.id,
+          details: {
+            identifier: input.issue.identifier,
+            status: "blocked",
+            previousStatus: input.issue.status,
+            source: "recovery.per_issue_rate_limit",
+            enqueueCount: input.enqueueCount,
+            latestRunId: input.latestRun?.id ?? null,
+          },
+        });
+      }
+
+      const [pausedAgent] = await tx
+        .update(agents)
+        .set({
+          status: "paused",
+          pauseReason: comment,
+          pausedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(agents.id, input.agentId),
+            notInArray(agents.status, ["paused", "terminated"]),
+          ),
+        )
+        .returning();
+
+      if (auditRunId) {
+        await tx.insert(heartbeatRunWatchdogDecisions).values({
+          companyId: input.issue.companyId,
+          runId: auditRunId,
+          evaluationIssueId: input.issue.id,
+          decision: "rate_limited",
+          reason: comment,
+        });
+      }
+
+      return { escalated: Boolean(updated), paused: Boolean(pausedAgent) };
+    });
   }
 
   async function hasQueuedIssueWake(companyId: string, issueId: string) {
@@ -1779,8 +1797,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           if (didEscalate) {
             result.rateLimitTripped += 1;
             result.issueIds.push(issue.id);
-        } else {
-          result.skipped += 1;
+          } else {
+            result.skipped += 1;
+          }
+          continue;
         }
 
         if (await isInvocationBudgetBlocked(issue, agentId)) {
@@ -1845,8 +1865,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         if (didEscalate) {
           result.rateLimitTripped += 1;
           result.issueIds.push(issue.id);
-      } else {
-        result.skipped += 1;
+        } else {
+          result.skipped += 1;
+        }
+        continue;
       }
 
       if (await isInvocationBudgetBlocked(issue, agentId)) {
