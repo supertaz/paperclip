@@ -801,8 +801,13 @@ rollback() {
     git stash push -m "paperclip-rollback-$(date +%s)" 2>>"$LOG_FILE" || true
   fi
   git reset --hard "$ref"
-  pnpm install --frozen-lockfile 2>>"$LOG_FILE" || pnpm install 2>>"$LOG_FILE" || true
-  pnpm build 2>>"$LOG_FILE" || true
+  if ! pnpm install --frozen-lockfile 2>>"$LOG_FILE"; then
+    log "WARN: frozen-lockfile failed during rollback; regular install may update pnpm-lock.yaml"
+    pnpm install 2>>"$LOG_FILE" || log "WARN: pnpm install failed during rollback"
+  fi
+  if ! pnpm build 2>>"$LOG_FILE"; then
+    log "WARN: pnpm build failed during rollback — server may not start"
+  fi
   systemctl --user restart "$SERVICE_NAME" 2>>"$LOG_FILE" || true
   if wait_for_server_healthy; then
     restore_heartbeats
@@ -1099,7 +1104,7 @@ if [ "$phase" = "swapping" ]; then
 
   log "Installing dependencies on live repo..."
   if ! pnpm install --frozen-lockfile 2>>"$LOG_FILE"; then
-    log "WARN: frozen-lockfile failed, trying regular install"
+    log "WARN: frozen-lockfile failed on live repo; regular install may update pnpm-lock.yaml"
     if ! pnpm install 2>>"$LOG_FILE"; then
       log "ERROR: pnpm install failed on live repo"
       rollback
@@ -1120,7 +1125,11 @@ if [ "$phase" = "swapping" ]; then
   fi
 
   log "Starting Paperclip..."
-  systemctl --user start "$SERVICE_NAME" 2>>"$LOG_FILE"
+  if ! systemctl --user start "$SERVICE_NAME" 2>>"$LOG_FILE"; then
+    log "ERROR: systemctl start failed — rolling back immediately"
+    rollback
+    exit 1
+  fi
 
   if ! wait_for_server_healthy; then
     log "ERROR: Server not responding — rolling back"
