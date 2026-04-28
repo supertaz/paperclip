@@ -6,7 +6,7 @@ import { activityApi } from "../api/activity";
 import { accessApi } from "../api/access";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
-import { instanceSettingsApi } from "../api/instanceSettings";
+import { heartbeatsApi } from "../api/heartbeats";
 import { projectsApi } from "../api/projects";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
 import { useCompany } from "../context/CompanyContext";
@@ -50,9 +50,9 @@ export function Dashboard() {
     enabled: !!selectedCompanyId,
   });
 
-  const { data: agentQueuedCounts } = useQuery({
-    queryKey: queryKeys.instance.agentQueuedCounts,
-    queryFn: () => instanceSettingsApi.getAgentQueuedCounts(),
+  const { data: liveRuns } = useQuery({
+    queryKey: [...queryKeys.liveRuns(selectedCompanyId ?? "__none__"), "dashboard-queued-count"],
+    queryFn: () => heartbeatsApi.liveRunsForCompany(selectedCompanyId!, { minCount: 0, limit: 0 }),
     refetchInterval: 15_000,
     enabled: !!selectedCompanyId,
   });
@@ -160,16 +160,9 @@ export function Dashboard() {
     return map;
   }, [agents]);
 
-  const companyAgentIds = useMemo(
-    () => new Set((agents ?? []).map((a) => a.id)),
-    [agents],
-  );
-
   const companyQueuedCount = useMemo(() => {
-    return (agentQueuedCounts ?? [])
-      .filter((e) => companyAgentIds.has(e.agentId))
-      .reduce((sum, e) => sum + e.queuedCount, 0);
-  }, [agentQueuedCounts, companyAgentIds]);
+    return (liveRuns ?? []).filter((run) => run.status === "queued").length;
+  }, [liveRuns]);
 
   const activeAgentCount = (agents ?? []).filter((a) => a.status !== "terminated").length;
 
