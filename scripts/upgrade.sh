@@ -327,7 +327,7 @@ fetch_integration_pr_refs() {
   jq -r '.[].number' "$STATE_DIR/integration-prs.json" | while IFS= read -r number; do
     [ -z "$number" ] && continue
     log "Integration: fetching PR #$number"
-    if ! git -C "$REPO_DIR" fetch "$UPSTREAM" "pull/$number/head:refs/remotes/paperclip-integration/pr-$number" 2>>"$LOG_FILE"; then
+    if ! git -C "$REPO_DIR" fetch "$UPSTREAM" "+pull/$number/head:refs/remotes/paperclip-integration/pr-$number" 2>>"$LOG_FILE"; then
       log "ERROR: Failed to fetch PR #$number from $UPSTREAM"
       return 1
     fi
