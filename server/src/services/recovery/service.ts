@@ -1753,22 +1753,22 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             "Moving it to `blocked` so it is visible for intervention.",
         });
         const auditRunId = latestRun?.id ?? issue.checkoutRunId ?? issue.executionRunId ?? null;
-        if (auditRunId) {
-          await db.insert(heartbeatRunWatchdogDecisions).values({
-            companyId: issue.companyId,
-            runId: auditRunId,
-            evaluationIssueId: issue.id,
-            decision: "rate_limited",
-            snoozedUntil: null,
-            reason:
-              `Continuation cap of ${recoverySettings.continuationDailyCap} reached ` +
-              `(${dailyCount} runs ${windowDescription}).`,
-            createdByAgentId: null,
-            createdByUserId: null,
-            createdByRunId: null,
-          });
-        }
         if (updated) {
+          if (auditRunId) {
+            await db.insert(heartbeatRunWatchdogDecisions).values({
+              companyId: issue.companyId,
+              runId: auditRunId,
+              evaluationIssueId: issue.id,
+              decision: "rate_limited",
+              snoozedUntil: null,
+              reason:
+                `Continuation cap of ${recoverySettings.continuationDailyCap} reached ` +
+                `(${dailyCount} runs ${windowDescription}).`,
+              createdByAgentId: null,
+              createdByUserId: null,
+              createdByRunId: null,
+            });
+          }
           result.dailyCapTripped += 1;
           result.escalated += 1;
           result.issueIds.push(issue.id);
