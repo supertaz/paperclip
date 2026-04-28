@@ -1,15 +1,19 @@
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { agents, heartbeatRuns } from "@paperclipai/db";
-import { patchInstanceExperimentalSettingsSchema, patchInstanceGeneralSettingsSchema } from "@paperclipai/shared";
+import {
+  issueGraphLivenessAutoRecoveryRequestSchema,
+  patchInstanceExperimentalSettingsSchema,
+  patchInstanceGeneralSettingsSchema,
+} from "@paperclipai/shared";
 import { z } from "zod";
 import { eq, count } from "drizzle-orm";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
-import { instanceSettingsService, logActivity } from "../services/index.js";
-import { heartbeatService } from "../services/heartbeat.js";
+import { heartbeatService, instanceSettingsService, logActivity } from "../services/index.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
+import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 function assertCanManageInstanceSettings(req: Request) {
   if (req.actor.type !== "board") {
@@ -23,11 +27,16 @@ function assertCanManageInstanceSettings(req: Request) {
 
 export function instanceSettingsRoutes(
   db: Db,
-  schedulerHeartbeat?: ReturnType<typeof heartbeatService>,
+  options: {
+    pluginWorkerManager?: PluginWorkerManager;
+    schedulerHeartbeat?: ReturnType<typeof heartbeatService>;
+  } = {},
 ) {
   const router = Router();
   const svc = instanceSettingsService(db);
-  const heartbeat = schedulerHeartbeat ?? heartbeatService(db);
+  const heartbeat = options.schedulerHeartbeat ?? heartbeatService(db, {
+    pluginWorkerManager: options.pluginWorkerManager,
+  });
 
   router.get("/instance/settings/general", async (req, res) => {
     // General settings (e.g. keyboardShortcuts) are readable by any
@@ -181,6 +190,54 @@ export function instanceSettingsRoutes(
     );
     res.json(state);
   });
+
+  router.post(
+    "/instance/settings/experimental/issue-graph-liveness-auto-recovery/preview",
+    validate(issueGraphLivenessAutoRecoveryRequestSchema),
+    async (req, res) => {
+      assertCanManageInstanceSettings(req);
+      res.json(await heartbeat.buildIssueGraphLivenessAutoRecoveryPreview({
+        lookbackHours: req.body.lookbackHours,
+      }));
+    },
+  );
+
+  router.post(
+    "/instance/settings/experimental/issue-graph-liveness-auto-recovery/run",
+    validate(issueGraphLivenessAutoRecoveryRequestSchema),
+    async (req, res) => {
+      assertCanManageInstanceSettings(req);
+      const actor = getActorInfo(req);
+      const result = await heartbeat.reconcileIssueGraphLiveness({
+        runId: actor.runId,
+        force: true,
+        lookbackHours: req.body.lookbackHours,
+      });
+      const companyIds = await svc.listCompanyIds();
+      await Promise.all(
+        companyIds.map((companyId) =>
+          logActivity(db, {
+            companyId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            agentId: actor.agentId,
+            runId: actor.runId,
+            action: "instance.settings.issue_graph_liveness_auto_recovery_run",
+            entityType: "instance_settings",
+            entityId: "default",
+            details: {
+              lookbackHours: result.lookbackHours,
+              escalationsCreated: result.escalationsCreated,
+              existingEscalations: result.existingEscalations,
+              skippedOutsideLookback: result.skippedOutsideLookback,
+              escalationIssueIds: result.escalationIssueIds,
+            },
+          }),
+        ),
+      );
+      res.json(result);
+    },
+  );
 
   return router;
 }
