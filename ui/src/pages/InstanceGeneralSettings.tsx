@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   PatchInstanceGeneralSettings,
@@ -446,6 +446,8 @@ function InstanceNumberField({
   disabled: boolean;
   onCommit: (v: number) => void;
 }) {
+  const inputId = useId();
+  const errorId = `${inputId}-error`;
   const [draft, setDraft] = useState<string>(String(value));
   const parsedDraft = parseInt(draft, 10);
   const invalidDraft =
@@ -470,16 +472,17 @@ function InstanceNumberField({
 
   return (
     <div className="space-y-1">
-      <label className="text-sm font-medium">{label}</label>
+      <label htmlFor={inputId} className="text-sm font-medium">{label}</label>
       <p className="text-xs text-muted-foreground">{description}</p>
       <input
+        id={inputId}
         type="number"
         min={min}
         max={max}
         value={draft}
         disabled={disabled}
         aria-invalid={invalidDraft}
-        aria-describedby={errorMessage ? `${label.replaceAll(" ", "-").toLowerCase()}-error` : undefined}
+        aria-describedby={errorMessage ? errorId : undefined}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={handleBlur}
         onKeyDown={(e) => {
@@ -494,7 +497,7 @@ function InstanceNumberField({
         )}
       />
       {errorMessage ? (
-        <p id={`${label.replaceAll(" ", "-").toLowerCase()}-error`} className="text-xs text-destructive">
+        <p id={errorId} className="text-xs text-destructive">
           {errorMessage}
         </p>
       ) : null}

@@ -3,7 +3,6 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents,
-  agentWakeupRequests,
   companies,
   createDb,
   heartbeatRuns,
