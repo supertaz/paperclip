@@ -407,7 +407,7 @@ report_pr_main_conflicts() {
 
 compose_integration_candidate() {
   local upstream_commit="$1"
-  local number title pr_ref pr_base patch_file
+  local number title pr_ref pr_base
 
   if [ -d "$BUILD_DIR" ]; then
     git -C "$REPO_DIR" worktree remove --force "$BUILD_DIR" 2>/dev/null || rm -rf "$BUILD_DIR"
@@ -418,25 +418,34 @@ compose_integration_candidate() {
     [ -z "$number" ] && continue
     pr_ref="refs/remotes/paperclip-integration/pr-$number"
     pr_base=$(git -C "$REPO_DIR" merge-base "$UPSTREAM/$UPSTREAM_BRANCH" "$pr_ref")
-    patch_file="$STATE_DIR/integration-pr-$number.patch"
-    git -C "$REPO_DIR" diff --binary --full-index "$pr_base" "$pr_ref" > "$patch_file"
-    if [ ! -s "$patch_file" ]; then
-      log "Integration: skipping PR #$number - patch is empty against upstream"
-      rm -f "$patch_file"
+
+    if git -C "$BUILD_DIR" merge-base --is-ancestor "$pr_ref" HEAD; then
+      log "Integration: skipping PR #$number - already contained in candidate"
       continue
     fi
 
-    log "Integration: applying PR #$number - $title"
-    if ! git -C "$BUILD_DIR" apply --3way --index "$patch_file" 2>>"$LOG_FILE"; then
-      log "ERROR: Integration patch conflict while applying PR #$number"
+    log "Integration: merging PR #$number - $title"
+    if git -C "$BUILD_DIR" \
+      -c rerere.enabled=true \
+      -c rerere.autoupdate=true \
+      merge --no-ff --no-edit -m "Integrate PR #$number: $title" "$pr_ref" 2>>"$LOG_FILE"; then
+      continue
+    fi
+
+    if ! git -C "$BUILD_DIR" diff --name-only --diff-filter=U | grep -q .; then
+      log "Integration: rerere resolved PR #$number conflict; committing recorded resolution"
+      if git -C "$BUILD_DIR" commit --no-edit 2>>"$LOG_FILE"; then
+        continue
+      fi
+    fi
+
+    log "ERROR: Integration merge conflict while applying PR #$number"
+    if git -C "$BUILD_DIR" diff --name-only --diff-filter=U | grep -q .; then
       echo "$pr_base" > "$INTEGRATION_CONFLICT_BASE_FILE"
       record_integration_conflict "$STATE_DIR/integration-compose-conflicts.jsonl" "$number" "$title" "$upstream_commit" "$pr_base"
-      git -C "$BUILD_DIR" reset --hard HEAD 2>>"$LOG_FILE" || true
-      rm -f "$patch_file"
-      return 1
     fi
-    rm -f "$patch_file"
-    git -C "$BUILD_DIR" commit -m "Integrate PR #$number: $title" 2>>"$LOG_FILE"
+    git -C "$BUILD_DIR" merge --abort 2>>"$LOG_FILE" || git -C "$BUILD_DIR" reset --hard HEAD 2>>"$LOG_FILE" || true
+    return 1
   done < <(jq -r '.[] | [.number, (.title | gsub("\t"; " "))] | @tsv' "$STATE_DIR/integration-prs.json")
 
   return 0
