@@ -141,13 +141,13 @@ describeEmbeddedPostgres("daily continuation cap", () => {
 
     if (breakConsecutiveTail) {
       // Keep this fixture focused on the 24h aggregate cap when combined with
-      // the stricter consecutive-continuation cap.
+      // the stricter consecutive-continuation cap and the latest-success guard.
       const createdAt = new Date(Date.now() - 5_000);
       await db.insert(heartbeatRuns).values({
         id: randomUUID(),
         companyId,
         agentId,
-        status: "succeeded",
+        status: "failed",
         invocationSource: "automation",
         triggerDetail: "system",
         startedAt: createdAt,
