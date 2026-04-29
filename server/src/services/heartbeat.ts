@@ -2027,12 +2027,63 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return unsafeTextProjectionPromise;
   }
 
+  // Per-agent rolling enqueue timestamps for two-tier runaway detection.
+  // Thresholds are read from instance settings at trip-check time so they
+  // can be tuned via the UI without a restart.
+  const enqueueTimestamps = new Map<string, number[]>();
+
+  async function recordEnqueueAndCheckRunaway(agentId: string, agentName: string): Promise<void> {
+    const cfg = (await instanceSettings.getGeneral()).runaway;
+    if (!cfg.autoPauseEnabled) return;
+
+    const fastWindowMs = cfg.fastWindowSec * 1000;
+    const slowWindowMs = cfg.slowWindowSec * 1000;
+    const now = Date.now();
+    const slowCutoff = now - slowWindowMs;
+    const times = (enqueueTimestamps.get(agentId) ?? []).filter((t) => t > slowCutoff);
+    times.push(now);
+    enqueueTimestamps.set(agentId, times);
+
+    const fastCount = times.filter((t) => t > now - fastWindowMs).length;
+    const slowCount = times.length;
+
+    let tripReason: string | null = null;
+    if (fastCount >= cfg.fastThresholdCount) {
+      tripReason = `auto-paused: ${fastCount} enqueues in last ${cfg.fastWindowSec}s (fast-trip threshold: ${cfg.fastThresholdCount})`;
+    } else if (slowCount >= cfg.slowThresholdCount) {
+      tripReason = `auto-paused: ${slowCount} enqueues in last ${cfg.slowWindowSec}s (slow-trip threshold: ${cfg.slowThresholdCount})`;
+    }
+
+    if (tripReason) {
+      logger.warn({ agentId, agentName, fastCount, slowCount }, "runaway detector triggered — auto-pausing agent");
+      enqueueTimestamps.delete(agentId);
+      const autoPausePatch = { autoPause: { paused: true, reason: tripReason, triggeredAt: new Date().toISOString() } };
+      await db.update(agents).set({
+        runtimeConfig: sql`coalesce(${agents.runtimeConfig}, '{}'::jsonb) || ${JSON.stringify(autoPausePatch)}::jsonb`,
+        updatedAt: new Date(),
+      }).where(eq(agents.id, agentId));
+      await cancelActiveForAgentInternal(agentId, tripReason);
+    }
+  }
+
+
   async function getAgent(agentId: string) {
     return db
       .select()
       .from(agents)
       .where(eq(agents.id, agentId))
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function canEnqueueForAgent(agentId: string): Promise<{ allowed: boolean; reason?: string }> {
+    const { paused: systemPaused } = await instanceSettings.getSystemPauseState();
+    if (systemPaused) return { allowed: false, reason: "system_paused" };
+    const agent = await getAgent(agentId);
+    if (!agent) return { allowed: false, reason: "agent_not_found" };
+    if (agent.status === "paused") return { allowed: false, reason: "agent_manual_paused" };
+    const autoPause = (agent.runtimeConfig as Record<string, unknown> | null)?.autoPause as { paused?: boolean } | undefined;
+    if (autoPause?.paused) return { allowed: false, reason: "agent_auto_paused" };
+    return { allowed: true };
   }
 
   async function getRun(runId: string, opts?: { unsafeFullResultJson?: boolean }) {
@@ -3073,6 +3124,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     agent: typeof agents.$inferSelect,
     issueId: string,
   ) {
+    const enqueueCheck = await canEnqueueForAgent(agent.id);
+    if (!enqueueCheck.allowed) {
+      logger.info({ agentId: agent.id, runId: run.id, reason: enqueueCheck.reason }, "skipping missing_issue_comment retry — enqueue gated");
+      return null;
+    }
     const contextSnapshot = parseObject(run.contextSnapshot);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(contextSnapshot, null);
     const sessionBefore = await resolveSessionBeforeForWakeup(agent, taskKey);
@@ -3293,6 +3349,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     agent: typeof agents.$inferSelect,
     now: Date,
   ) {
+    const enqueueCheck = await canEnqueueForAgent(agent.id);
+    if (!enqueueCheck.allowed) {
+      logger.info({ agentId: agent.id, runId: run.id, reason: enqueueCheck.reason }, "skipping process_loss retry — enqueue gated");
+      return null;
+    }
     const contextSnapshot = parseObject(run.contextSnapshot);
     const issueId = readNonEmptyString(contextSnapshot.issueId);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(contextSnapshot, null);
@@ -3401,6 +3462,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       wakeReason?: string;
     },
   ) {
+    const enqueueCheck = await canEnqueueForAgent(agent.id);
+    if (!enqueueCheck.allowed) {
+      logger.info({ agentId: agent.id, runId: run.id, reason: enqueueCheck.reason }, "skipping bounded retry schedule — enqueue gated");
+      return { outcome: "skipped_paused" as const };
+    }
     const now = opts?.now ?? new Date();
     const retryReason = opts?.retryReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_REASON;
     const wakeReason = opts?.wakeReason ?? BOUNDED_TRANSIENT_HEARTBEAT_RETRY_WAKE_REASON;
@@ -3573,6 +3639,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const promotedRunIds: string[] = [];
 
     for (const dueRun of dueRuns) {
+      const enqueueCheck = await canEnqueueForAgent(dueRun.agentId);
+      if (!enqueueCheck.allowed) {
+        logger.info({ agentId: dueRun.agentId, runId: dueRun.id, reason: enqueueCheck.reason }, "skipping scheduled retry promotion — enqueue gated");
+        continue;
+      }
       const dueRunIssueId = readNonEmptyString(parseObject(dueRun.contextSnapshot).issueId);
       if (dueRunIssueId) {
         const issue = await db
@@ -4123,7 +4194,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         lastHeartbeatAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(agents.id, agentId))
+      .where(
+        and(
+          eq(agents.id, agentId),
+          notInArray(agents.status, ["paused", "terminated"]),
+        ),
+      )
       .returning()
       .then((rows) => rows[0] ?? null);
 
@@ -4602,9 +4678,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
   async function startNextQueuedRunForAgent(agentId: string) {
     return withAgentStartLock(agentId, async () => {
+      const enqueueCheck = await canEnqueueForAgent(agentId);
+      if (!enqueueCheck.allowed) {
+        logger.info({ agentId, reason: enqueueCheck.reason }, "skipping queued run start — enqueue gated");
+        return [];
+      }
       const agent = await getAgent(agentId);
       if (!agent) return [];
-      if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
+      if (agent.status === "terminated" || agent.status === "pending_approval") {
         return [];
       }
       const policy = parseHeartbeatPolicy(agent);
@@ -5937,6 +6018,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   async function releaseIssueExecutionAndPromote(run: typeof heartbeatRuns.$inferSelect) {
+    const enqueueCheck = await canEnqueueForAgent(run.agentId);
     const runContext = parseObject(run.contextSnapshot);
     const contextIssueId = readNonEmptyString(runContext.issueId);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(runContext, null);
@@ -6144,6 +6226,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const promotedContinuationAttempt = readContinuationAttempt(
           promotedContextSnapshot.livenessContinuationAttempt,
         );
+        const deferredEnqueueCheck = await canEnqueueForAgent(deferredAgent.id);
+        if (!deferredEnqueueCheck.allowed) {
+          logger.info({ agentId: deferredAgent.id, deferredId: deferred.id, reason: deferredEnqueueCheck.reason }, "skipping deferred wake promotion — enqueue gated");
+          continue;
+        }
         const now = new Date();
         const newRun = await tx
           .insert(heartbeatRuns)
@@ -6224,10 +6311,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
 
       const shouldBlockImmediately =
+        !enqueueCheck.allowed ||
         issue.originKind === RECOVERY_ORIGIN_KINDS.strandedIssueRecovery ||
         !recoveryAgentInvokable ||
         !recoveryAgent ||
         didAutomaticRecoveryFail(run, issue.status === "todo" ? "assignment_recovery" : "issue_continuation_needed");
+      if (!enqueueCheck.allowed) {
+        logger.info({ agentId: run.agentId, runId: run.id, reason: enqueueCheck.reason }, "skipping issue execution recovery — enqueue gated");
+      }
       if (shouldBlockImmediately) {
         const comment = buildImmediateExecutionPathRecoveryComment({
           status: issue.status as "todo" | "in_progress",
@@ -6347,6 +6438,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
+    const { paused } = await instanceSettings.getSystemPauseState();
+    if (paused) {
+      logger.info({ agentId, source: opts.source }, "system paused — skipping enqueue");
+      return null;
+    }
+
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
@@ -6368,6 +6465,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const agent = await getAgent(agentId);
     if (!agent) throw notFound("Agent not found");
+
     const explicitResumeSession = await resolveExplicitResumeSessionOverride(agent, payload, taskKey);
     if (explicitResumeSession) {
       enrichedContextSnapshot.resumeFromRunId = explicitResumeSession.resumeFromRunId;
@@ -6405,6 +6503,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         finishedAt: new Date(),
       });
     };
+
+    const autoPause = (agent.runtimeConfig as Record<string, unknown> | null)?.autoPause as { paused?: boolean } | undefined;
+    if (autoPause?.paused) {
+      logger.info({ agentId, agentName: agent.name, source: opts.source }, "agent auto-paused by runaway detector — skipping enqueue");
+      await writeSkippedRequest("runaway_auto_pause");
+      return null;
+    }
 
     let projectId = readNonEmptyString(enrichedContextSnapshot.projectId);
     if (!projectId && issueId) {
@@ -6918,6 +7023,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       });
 
       await startNextQueuedRunForAgent(agent.id);
+      if (agent.status !== "paused") {
+        void recordEnqueueAndCheckRunaway(agentId, agent.name).catch((err) =>
+          logger.error({ agentId, err }, "runaway detector error — auto-pause may not have fired"),
+        );
+      }
       return newRun;
     }
 
@@ -7033,6 +7143,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     });
 
     await startNextQueuedRunForAgent(agent.id);
+    if (agent.status !== "paused") {
+      void recordEnqueueAndCheckRunaway(agentId, agent.name).catch((err) =>
+        logger.error({ agentId, err }, "runaway detector error — auto-pause may not have fired"),
+      );
+    }
 
     return newRun;
   }
@@ -7528,6 +7643,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     buildRunOutputSilence,
 
     tickTimers: async (now = new Date()) => {
+      const { paused } = await instanceSettings.getSystemPauseState();
+      if (paused) {
+        logger.info("system paused — heartbeat tick skipped");
+        return { checked: 0, enqueued: 0, skipped: 0 };
+      }
+
       const allAgents = await db.select().from(agents);
       let checked = 0;
       let enqueued = 0;
@@ -7565,6 +7686,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     cancelRun: (runId: string) => cancelRunInternal(runId),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
+
+    clearAgentEnqueueTimestamps: (agentId: string) => { enqueueTimestamps.delete(agentId); },
+
+    cancelAllActiveRuns: async (reason: string) => {
+      const activeAgentIds = await db
+        .selectDistinct({ agentId: heartbeatRuns.agentId })
+        .from(heartbeatRuns)
+        .where(inArray(heartbeatRuns.status, [...CANCELLABLE_HEARTBEAT_RUN_STATUSES]));
+      await Promise.all(activeAgentIds.map(({ agentId }) => cancelActiveForAgentInternal(agentId, reason)));
+    },
 
     cancelBudgetScopeWork,
 
