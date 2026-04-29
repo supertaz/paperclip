@@ -44,6 +44,7 @@ import {
 } from "./issue-graph-liveness.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
 
+const CONTINUATION_CYCLE_CAP = 3;
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_MIN_STALE_MS = 24 * 60 * 60 * 1000;
@@ -362,6 +363,29 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     ]);
 
     return Boolean(run || deferredWake);
+  }
+
+  async function hasExhaustedConsecutiveContinuationCycles(companyId: string, issueId: string, since: Date) {
+    const recentRuns = await db
+      .select({
+        status: heartbeatRuns.status,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+      })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+          gt(heartbeatRuns.createdAt, since),
+        ),
+      )
+      .orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id))
+      .limit(CONTINUATION_CYCLE_CAP);
+    if (recentRuns.length < CONTINUATION_CYCLE_CAP) return false;
+    return recentRuns.every((run) => {
+      const ctx = parseObject(run.contextSnapshot);
+      return run.status === "succeeded" && readNonEmptyString(ctx.retryReason) === "issue_continuation_needed";
+    });
   }
 
   async function hasQueuedIssueWake(companyId: string, issueId: string) {
@@ -1731,6 +1755,25 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           comment:
             "Paperclip automatically retried continuation for this assigned `in_progress` issue after its live " +
             `execution disappeared, but it still has no live execution path.${failureSummary ?? ""} ` +
+            "Moving it to `blocked` so it is visible for intervention.",
+        });
+        if (updated) {
+          result.escalated += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
+
+      if (await hasExhaustedConsecutiveContinuationCycles(issue.companyId, issue.id, issue.updatedAt)) {
+        const updated = await escalateStrandedAssignedIssue({
+          issue,
+          previousStatus: "in_progress",
+          latestRun,
+          comment:
+            "Paperclip retried continuation for this assigned `in_progress` issue " +
+            `${CONTINUATION_CYCLE_CAP} times in a row without making progress. ` +
             "Moving it to `blocked` so it is visible for intervention.",
         });
         if (updated) {
