@@ -1932,6 +1932,18 @@ export function issueRoutes(
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
 
     const actor = getActorInfo(req);
+
+    // Recover true agent when bearer token was omitted but x-paperclip-run-id was sent.
+    let resolvedActorAgentId: string | null = actor.agentId;
+    let resolvedActorIsAgent = actor.actorType === "agent";
+    if (actor.actorType !== "agent" && actor.runId) {
+      const run = await heartbeat.getRun(actor.runId);
+      if (run?.agentId && run.companyId === existing.companyId) {
+        resolvedActorAgentId = run.agentId;
+        resolvedActorIsAgent = true;
+      }
+    }
+
     const isClosed = isClosedIssueStatus(existing.status);
     const isBlocked = existing.status === "blocked";
     const normalizedAssigneeAgentId = await normalizeIssueAssigneeAgentReference(
@@ -1972,8 +1984,8 @@ export function issueRoutes(
         shouldImplicitlyMoveCommentedIssueToTodo({
           issueStatus: existing.status,
           assigneeAgentId: requestedAssigneeAgentId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
+          actorType: resolvedActorIsAgent ? "agent" : actor.actorType,
+          actorId: resolvedActorAgentId ?? actor.actorId,
         }));
     const updateReferenceSummaryBefore = titleOrDescriptionChanged
       ? await issueReferencesSvc.listIssueReferenceSummary(existing.id)
@@ -2392,8 +2404,8 @@ export function issueRoutes(
       const commentReferenceSummaryBefore = updateReferenceSummaryAfter
         ?? await issueReferencesSvc.listIssueReferenceSummary(issue.id);
       comment = await svc.addComment(id, commentBody, {
-        agentId: actor.agentId ?? undefined,
-        userId: actor.actorType === "user" ? actor.actorId : undefined,
+        agentId: resolvedActorAgentId ?? undefined,
+        userId: resolvedActorIsAgent ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
         runId: actor.runId,
       });
       await issueReferencesSvc.syncComment(comment.id);
@@ -2558,8 +2570,7 @@ export function issueRoutes(
 
       if (commentBody && comment) {
         const assigneeId = issue.assigneeAgentId;
-        const actorIsAgent = actor.actorType === "agent";
-        const selfComment = actorIsAgent && actor.actorId === assigneeId;
+        const selfComment = resolvedActorIsAgent && resolvedActorAgentId === assigneeId;
         const skipAssigneeCommentWake = selfComment || isClosed;
 
         if (assigneeId && !assigneeChanged && (reopened || !skipAssigneeCommentWake)) {
@@ -3361,6 +3372,20 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+
+    // When an agent omits its bearer token but correctly sends x-paperclip-run-id,
+    // the server resolves the actor as board. Recover the true agent from the run
+    // record so attribution and self-wake suppression work correctly.
+    let resolvedActorAgentId: string | null = actor.agentId;
+    let resolvedActorIsAgent = actor.actorType === "agent";
+    if (actor.actorType !== "agent" && actor.runId) {
+      const run = await heartbeat.getRun(actor.runId);
+      if (run?.agentId && run.companyId === issue.companyId) {
+        resolvedActorAgentId = run.agentId;
+        resolvedActorIsAgent = true;
+      }
+    }
+
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
     const interruptRequested = req.body.interrupt === true;
@@ -3376,8 +3401,8 @@ export function issueRoutes(
       shouldImplicitlyMoveCommentedIssueToTodo({
         issueStatus: issue.status,
         assigneeAgentId: issue.assigneeAgentId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
+        actorType: resolvedActorIsAgent ? "agent" : actor.actorType,
+        actorId: resolvedActorAgentId ?? actor.actorId,
       });
     const hasUnresolvedFirstClassBlockers =
       isBlocked && effectiveMoveToTodoRequested
@@ -3450,8 +3475,8 @@ export function issueRoutes(
     }
 
     const comment = await svc.addComment(id, req.body.body, {
-      agentId: actor.agentId ?? undefined,
-      userId: actor.actorType === "user" ? actor.actorId : undefined,
+      agentId: resolvedActorAgentId ?? undefined,
+      userId: resolvedActorIsAgent ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
       runId: actor.runId,
     });
     await issueReferencesSvc.syncComment(comment.id);
@@ -3510,8 +3535,7 @@ export function issueRoutes(
     void (async () => {
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
       const assigneeId = currentIssue.assigneeAgentId;
-      const actorIsAgent = actor.actorType === "agent";
-      const selfComment = actorIsAgent && actor.actorId === assigneeId;
+      const selfComment = resolvedActorIsAgent && resolvedActorAgentId === assigneeId;
       const skipWake = selfComment || isClosed;
       if (assigneeId && (reopened || !skipWake)) {
         if (reopened) {
@@ -3578,7 +3602,7 @@ export function issueRoutes(
 
       for (const mentionedId of mentionedIds) {
         if (wakeups.has(mentionedId)) continue;
-        if (actorIsAgent && actor.actorId === mentionedId) continue;
+        if (resolvedActorIsAgent && resolvedActorAgentId === mentionedId) continue;
         wakeups.set(mentionedId, {
           source: "automation",
           triggerDetail: "system",
