@@ -158,7 +158,7 @@ describeEmbeddedPostgres("per-issue recovery rate limit", () => {
     expect(decisions[0]?.decision).toBe("rate_limited");
   });
 
-  it("does not trip when fewer than 5 enqueues in window", async () => {
+  it("observes continuation success when fewer than 5 enqueues exist in the window", async () => {
     const { issueId } = await seedIssueWithRecentRuns(4);
     const enqueueWakeup = vi.fn().mockResolvedValue({ id: randomUUID() });
     const recovery = recoveryService(db, { enqueueWakeup });
@@ -166,7 +166,9 @@ describeEmbeddedPostgres("per-issue recovery rate limit", () => {
     const result = await recovery.reconcileStrandedAssignedIssues();
 
     expect(result.rateLimitTripped).toBe(0);
-    expect(result.continuationRequeued).toBe(1);
+    expect(result.successfulContinuationObserved).toBe(1);
+    expect(result.continuationRequeued).toBe(0);
+    expect(enqueueWakeup).not.toHaveBeenCalled();
 
     const [updatedIssue] = await db.select().from(issues).where(eq(issues.id, issueId));
     expect(updatedIssue?.status).toBe("in_progress");

@@ -1844,6 +1844,29 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         result.skipped += 1;
         continue;
       }
+
+      const continuationEnqueueCount = await countIssueRecoveryEnqueuesInWindow(
+        issue.companyId,
+        agentId,
+        issue.id,
+        ISSUE_RECOVERY_RATE_WINDOW_MS,
+      );
+      if (continuationEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
+        const { escalated: didEscalate } = await tripIssueRecoveryRateLimit({
+          issue,
+          agentId,
+          latestRun,
+          enqueueCount: continuationEnqueueCount,
+        });
+        if (didEscalate) {
+          result.rateLimitTripped += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
+
       if (isSuccessfulInProgressContinuationRun(latestRun)) {
         if (isProductiveContinuationRun(latestRun)) {
           result.productiveContinuationObserved += 1;
@@ -1866,28 +1889,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         });
         if (updated) {
           result.escalated += 1;
-          result.issueIds.push(issue.id);
-        } else {
-          result.skipped += 1;
-        }
-        continue;
-      }
-
-      const continuationEnqueueCount = await countIssueRecoveryEnqueuesInWindow(
-        issue.companyId,
-        agentId,
-        issue.id,
-        ISSUE_RECOVERY_RATE_WINDOW_MS,
-      );
-      if (continuationEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
-        const { escalated: didEscalate } = await tripIssueRecoveryRateLimit({
-          issue,
-          agentId,
-          latestRun,
-          enqueueCount: continuationEnqueueCount,
-        });
-        if (didEscalate) {
-          result.rateLimitTripped += 1;
           result.issueIds.push(issue.id);
         } else {
           result.skipped += 1;
