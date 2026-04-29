@@ -156,6 +156,7 @@ const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_r
 const CANCELLABLE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
+type CancelSource = "user_initiated" | "system" | "budget";
 export {
   ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS,
   ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS,
@@ -3761,11 +3762,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
     if (!agent) {
-      await cancelRunInternal(run.id, "Cancelled because the agent no longer exists");
+      await cancelRunInternal(run.id, "Cancelled because the agent no longer exists", "system");
       return null;
     }
     if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
-      await cancelRunInternal(run.id, "Cancelled because the agent is not invokable");
+      await cancelRunInternal(run.id, "Cancelled because the agent is not invokable", "system");
       return null;
     }
 
@@ -3775,7 +3776,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       projectId: readNonEmptyString(context.projectId),
     });
     if (budgetBlock) {
-      await cancelRunInternal(run.id, budgetBlock.reason);
+      await cancelRunInternal(run.id, budgetBlock.reason, "budget");
       return null;
     }
 
@@ -3791,7 +3792,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         contextSnapshot: context,
       });
       if (activePauseHold && !treeHoldInteractionWake) {
-        await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold");
+        await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold", "system");
         await logActivity(db, {
           companyId: run.companyId,
           actorType: "system",
@@ -7235,7 +7236,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane", opts: { userInitiated?: boolean } = {}) {
+  async function cancelRunInternal(runId: string, reason?: string, cancelSource?: CancelSource) {
+    const resolvedReason = reason ?? (cancelSource === "user_initiated" ? "Cancelled by user" : "Cancelled by control plane");
+    const userInitiated = cancelSource === "user_initiated";
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
@@ -7257,20 +7260,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const cancelled = await setRunStatus(run.id, "cancelled", {
       finishedAt: new Date(),
-      error: reason,
+      error: resolvedReason,
       errorCode: "cancelled",
+      ...(cancelSource ? { cancelSource } : {}),
       ...(agent ? {
         resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
           resultJson: parseObject(run.resultJson),
           errorCode: "cancelled",
-          errorMessage: reason,
+          errorMessage: resolvedReason,
         }),
       } : {}),
     });
 
     await setWakeupStatus(run.wakeupRequestId, "cancelled", {
       finishedAt: new Date(),
-      error: reason,
+      error: resolvedReason,
     });
 
     if (cancelled) {
@@ -7280,13 +7284,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         level: "warn",
         message: "run cancelled",
       });
-      await releaseIssueExecutionAndPromote(cancelled);
+      await releaseIssueExecutionAndPromote(cancelled, { suppressContinuationRecovery: userInitiated });
     }
 
     runningProcesses.delete(run.id);
     await finalizeAgentStatus(run.agentId, "cancelled");
 
-    if (opts.userInitiated) {
+    if (userInitiated) {
       // Drain any queued timer-sourced runs so they don't immediately promote
       // and re-start the agent. Non-timer queued runs (e.g. comment wakeups)
       // are left intact and will be picked up by startNextQueuedRunForAgent below.
@@ -7323,11 +7327,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return cancelled;
   }
 
-  async function cancelActiveForAgentInternal(
-    agentId: string,
-    reason = "Cancelled due to agent pause",
-    opts: { userInitiated?: boolean } = {},
-  ) {
+  async function cancelActiveForAgentInternal(agentId: string, reason?: string, cancelSource?: CancelSource) {
+    const resolvedReason = reason ?? (cancelSource === "user_initiated" ? "Cancelled by user" : "Cancelled due to agent pause");
+    const userInitiated = cancelSource === "user_initiated";
     const agent = await getAgent(agentId);
     const runs = await db
       .select()
@@ -7337,20 +7339,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     for (const run of runs) {
       const cancelled = await setRunStatus(run.id, "cancelled", {
         finishedAt: new Date(),
-        error: reason,
+        error: resolvedReason,
         errorCode: "cancelled",
+        ...(cancelSource ? { cancelSource } : {}),
         ...(agent ? {
           resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
             resultJson: parseObject(run.resultJson),
             errorCode: "cancelled",
-            errorMessage: reason,
+            errorMessage: resolvedReason,
           }),
         } : {}),
       });
 
       await setWakeupStatus(run.wakeupRequestId, "cancelled", {
         finishedAt: new Date(),
-        error: reason,
+        error: resolvedReason,
       });
 
       const running = runningProcesses.get(run.id);
@@ -7367,7 +7370,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           processGroupId: run.processGroupId,
         });
       }
-      await releaseIssueExecutionAndPromote(cancelled ?? run, { suppressContinuationRecovery: opts.userInitiated });
+      await releaseIssueExecutionAndPromote(cancelled ?? run, { suppressContinuationRecovery: userInitiated });
     }
 
     return runs.length;
@@ -7375,7 +7378,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
   async function cancelBudgetScopeWork(scope: BudgetEnforcementScope) {
     if (scope.scopeType === "agent") {
-      await cancelActiveForAgentInternal(scope.scopeId, "Cancelled due to budget pause");
+      await cancelActiveForAgentInternal(scope.scopeId, "Cancelled due to budget pause", "budget");
       await cancelPendingWakeupsForBudgetScope(scope);
       return;
     }
@@ -7395,7 +7398,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         : await listProjectScopedRunIds(scope.companyId, scope.scopeId);
 
     for (const runId of runIds) {
-      await cancelRunInternal(runId, "Cancelled due to budget pause");
+      await cancelRunInternal(runId, "Cancelled due to budget pause", "budget");
     }
 
     await cancelPendingWakeupsForBudgetScope(scope);
@@ -7735,9 +7738,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return { checked, enqueued, skipped };
     },
 
-    cancelRun: (runId: string, opts?: { userInitiated?: boolean }) => cancelRunInternal(runId, undefined, opts),
+    cancelRun: (runId: string, cancelSource?: CancelSource) => cancelRunInternal(runId, undefined, cancelSource),
 
-    cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId, undefined, { userInitiated: true }),
+    cancelActiveForAgent: (agentId: string, cancelSource: CancelSource = "user_initiated") =>
+      cancelActiveForAgentInternal(agentId, undefined, cancelSource),
 
     cancelBudgetScopeWork,
 
