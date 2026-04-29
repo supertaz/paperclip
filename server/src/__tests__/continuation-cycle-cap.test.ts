@@ -164,23 +164,21 @@ describeEmbeddedPostgres("continuation cycle cap", () => {
     expect(continuationWakes).toHaveLength(0);
   });
 
-  it("re-queues continuation when fewer than 3 consecutive succeeded runs exist", async () => {
+  it("observes continuation success when fewer than 3 consecutive succeeded runs exist", async () => {
     const { issueId } = await seedStrandedIssueWithRuns(2);
     const enqueueWakeup = vi.fn().mockResolvedValue({ id: randomUUID() });
     const recovery = recoveryService(db, { enqueueWakeup });
 
     const result = await recovery.reconcileStrandedAssignedIssues();
 
-    expect(result.continuationRequeued).toBe(1);
+    expect(result.successfulContinuationObserved).toBe(1);
+    expect(result.continuationRequeued).toBe(0);
     expect(result.escalated).toBe(0);
 
     const [updated] = await db.select().from(issues).where(eq(issues.id, issueId));
     expect(updated?.status).toBe("in_progress");
 
-    expect(enqueueWakeup).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ reason: "issue_continuation_needed" }),
-    );
+    expect(enqueueWakeup).not.toHaveBeenCalled();
   });
 
   it("re-queues after operator manually unblocks without immediately triggering a new run", async () => {

@@ -74,6 +74,7 @@ type RecoveryWakeup = (
 type LatestIssueRun = Pick<
   typeof heartbeatRuns.$inferSelect,
   "id" | "agentId" | "status" | "error" | "errorCode" | "contextSnapshot" | "livenessState"
+  | "createdAt"
 > | null;
 
 type WatchdogDecisionActor =
@@ -189,8 +190,8 @@ function isUnsuccessfulTerminalIssueRun(latestRun: LatestIssueRun) {
   );
 }
 
-function isSuccessfulInProgressContinuationRun(latestRun: LatestIssueRun) {
-  return latestRun?.status === "succeeded";
+function isSuccessfulInProgressContinuationRun(latestRun: LatestIssueRun, since: Date) {
+  return latestRun?.status === "succeeded" && latestRun.createdAt > since;
 }
 
 function isProductiveContinuationRun(latestRun: LatestIssueRun) {
@@ -313,6 +314,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         errorCode: heartbeatRuns.errorCode,
         contextSnapshot: heartbeatRuns.contextSnapshot,
         livenessState: heartbeatRuns.livenessState,
+        createdAt: heartbeatRuns.createdAt,
       })
       .from(heartbeatRuns)
       .where(
@@ -1729,7 +1731,25 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         result.skipped += 1;
         continue;
       }
-      if (isSuccessfulInProgressContinuationRun(latestRun)) {
+      if (await hasExhaustedConsecutiveContinuationCycles(issue.companyId, issue.id, issue.updatedAt)) {
+        const updated = await escalateStrandedAssignedIssue({
+          issue,
+          previousStatus: "in_progress",
+          latestRun,
+          comment:
+            "Paperclip retried continuation for this assigned `in_progress` issue " +
+            `${CONTINUATION_CYCLE_CAP} times in a row without making progress. ` +
+            "Moving it to `blocked` so it is visible for intervention.",
+        });
+        if (updated) {
+          result.escalated += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
+      if (isSuccessfulInProgressContinuationRun(latestRun, issue.updatedAt)) {
         if (isProductiveContinuationRun(latestRun)) {
           result.productiveContinuationObserved += 1;
         } else {
@@ -1747,25 +1767,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           comment:
             "Paperclip automatically retried continuation for this assigned `in_progress` issue after its live " +
             `execution disappeared, but it still has no live execution path.${failureSummary ?? ""} ` +
-            "Moving it to `blocked` so it is visible for intervention.",
-        });
-        if (updated) {
-          result.escalated += 1;
-          result.issueIds.push(issue.id);
-        } else {
-          result.skipped += 1;
-        }
-        continue;
-      }
-
-      if (await hasExhaustedConsecutiveContinuationCycles(issue.companyId, issue.id, issue.updatedAt)) {
-        const updated = await escalateStrandedAssignedIssue({
-          issue,
-          previousStatus: "in_progress",
-          latestRun,
-          comment:
-            "Paperclip retried continuation for this assigned `in_progress` issue " +
-            `${CONTINUATION_CYCLE_CAP} times in a row without making progress. ` +
             "Moving it to `blocked` so it is visible for intervention.",
         });
         if (updated) {
