@@ -74,7 +74,6 @@ type RecoveryWakeup = (
 type LatestIssueRun = Pick<
   typeof heartbeatRuns.$inferSelect,
   "id" | "agentId" | "status" | "error" | "errorCode" | "contextSnapshot" | "livenessState"
-  | "createdAt"
 > | null;
 
 type WatchdogDecisionActor =
@@ -190,8 +189,8 @@ function isUnsuccessfulTerminalIssueRun(latestRun: LatestIssueRun) {
   );
 }
 
-function isSuccessfulInProgressContinuationRun(latestRun: LatestIssueRun, since: Date) {
-  return latestRun?.status === "succeeded" && latestRun.createdAt > since;
+function isSuccessfulInProgressContinuationRun(latestRun: LatestIssueRun) {
+  return latestRun?.status === "succeeded";
 }
 
 function isProductiveContinuationRun(latestRun: LatestIssueRun) {
@@ -314,7 +313,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         errorCode: heartbeatRuns.errorCode,
         contextSnapshot: heartbeatRuns.contextSnapshot,
         livenessState: heartbeatRuns.livenessState,
-        createdAt: heartbeatRuns.createdAt,
       })
       .from(heartbeatRuns)
       .where(
@@ -1749,7 +1747,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         }
         continue;
       }
-      if (isSuccessfulInProgressContinuationRun(latestRun, issue.updatedAt)) {
+      if (isSuccessfulInProgressContinuationRun(latestRun)) {
         if (isProductiveContinuationRun(latestRun)) {
           result.productiveContinuationObserved += 1;
         } else {

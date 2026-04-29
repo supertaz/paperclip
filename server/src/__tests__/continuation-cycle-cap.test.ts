@@ -77,7 +77,11 @@ describeEmbeddedPostgres("continuation cycle cap", () => {
   const ISSUE_CREATED_AT = new Date("2026-04-25T09:00:00.000Z");
   const RUNS_BASE_TIME = new Date("2026-04-25T10:00:00.000Z");
 
-  async function seedStrandedIssueWithRuns(runCount: number, issueUpdatedAt = ISSUE_CREATED_AT) {
+  async function seedStrandedIssueWithRuns(
+    runCount: number,
+    issueUpdatedAt = ISSUE_CREATED_AT,
+    latestRecoveryBreakAfterIssueUpdate = false,
+  ) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issueId = randomUUID();
@@ -128,6 +132,26 @@ describeEmbeddedPostgres("continuation cycle cap", () => {
         contextSnapshot: {
           issueId,
           retryReason: "issue_continuation_needed",
+        },
+        logBytes: 0,
+      });
+    }
+
+    if (latestRecoveryBreakAfterIssueUpdate) {
+      const createdAt = new Date(issueUpdatedAt.getTime() + 60_000);
+      await db.insert(heartbeatRuns).values({
+        id: randomUUID(),
+        companyId,
+        agentId,
+        status: "failed",
+        invocationSource: "automation",
+        triggerDetail: "system",
+        startedAt: createdAt,
+        finishedAt: new Date(createdAt.getTime() + 30_000),
+        createdAt,
+        contextSnapshot: {
+          issueId,
+          retryReason: "assignment_recovery",
         },
         logBytes: 0,
       });
@@ -185,7 +209,7 @@ describeEmbeddedPostgres("continuation cycle cap", () => {
     // The 3 continuation runs predate the operator's manual unblock (issueUpdatedAt is after all runs).
     // The cap must not fire on runs that predate the last status change.
     const operatorUnblockedAt = new Date(RUNS_BASE_TIME.getTime() + 10 * 60_000);
-    const { issueId } = await seedStrandedIssueWithRuns(3, operatorUnblockedAt);
+    const { issueId } = await seedStrandedIssueWithRuns(3, operatorUnblockedAt, true);
     const enqueueWakeup = vi.fn().mockResolvedValue({ id: randomUUID() });
     const recovery = recoveryService(db, { enqueueWakeup });
 
