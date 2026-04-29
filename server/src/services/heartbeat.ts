@@ -6366,6 +6366,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   }
 
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
+    // Generic idempotency gate: if an idempotencyKey is provided and a non-failed
+    // wakeup with the same key already exists for this agent, skip insertion.
+    if (opts.idempotencyKey) {
+      const existing = await db
+        .select({ id: agentWakeupRequests.id })
+        .from(agentWakeupRequests)
+        .where(
+          and(
+            eq(agentWakeupRequests.agentId, agentId),
+            eq(agentWakeupRequests.idempotencyKey, opts.idempotencyKey),
+            inArray(agentWakeupRequests.status, ["queued", "deferred_issue_execution"]),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (existing) return null;
+    }
+
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
