@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
@@ -8,6 +8,7 @@ import {
   type IssueGraphLivenessAutoRecoveryPreviewItem,
 } from "@paperclipai/shared";
 import {
+  activityLog,
   agents,
   agentWakeupRequests,
   approvals,
@@ -15,6 +16,7 @@ import {
   heartbeatRunEvents,
   heartbeatRunWatchdogDecisions,
   heartbeatRuns,
+  issueComments,
   issueApprovals,
   issueRelations,
   issueThreadInteractions,
@@ -45,6 +47,8 @@ import {
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
 
 const CONTINUATION_CYCLE_CAP = 3;
+const ISSUE_RECOVERY_RATE_WINDOW_MS = 5 * 60 * 1000;
+const ISSUE_RECOVERY_RATE_CAP = 5;
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_MIN_STALE_MS = 24 * 60 * 60 * 1000;
@@ -385,6 +389,118 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return recentRuns.every((run) => {
       const ctx = parseObject(run.contextSnapshot);
       return run.status === "succeeded" && readNonEmptyString(ctx.retryReason) === "issue_continuation_needed";
+    });
+  }
+
+  async function countIssueRecoveryEnqueuesInWindow(
+    companyId: string,
+    agentId: string,
+    issueId: string,
+    windowMs: number,
+  ) {
+    const since = new Date(Date.now() - windowMs);
+    const [row] = await db
+      .select({ total: count() })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          eq(heartbeatRuns.agentId, agentId),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+          sql`${heartbeatRuns.contextSnapshot} ->> 'retryReason' IN ('assignment_recovery', 'issue_continuation_needed')`,
+          gt(heartbeatRuns.createdAt, since),
+        ),
+      );
+    return row?.total ?? 0;
+  }
+
+  async function tripIssueRecoveryRateLimit(input: {
+    issue: typeof issues.$inferSelect;
+    agentId: string;
+    latestRun: LatestIssueRun;
+    enqueueCount: number;
+  }) {
+    const windowMinutes = ISSUE_RECOVERY_RATE_WINDOW_MS / 60_000;
+    const comment =
+      `Paperclip detected a recovery loop: ${input.enqueueCount} recovery enqueues for this ` +
+      `issue in the last ${windowMinutes} minutes. ` +
+      "Moving the issue to `blocked` and pausing the agent to stop the loop.";
+
+    const now = new Date();
+    const auditRunId = input.latestRun?.id ?? input.issue.checkoutRunId ?? input.issue.executionRunId ?? null;
+    const commentBody = redactCurrentUserText(
+      `${comment}\n\n- Recovery issue: none — rate-limit trip requires direct operator intervention.\n- Next action: inspect the recovery run history, fix the underlying cause, then unblock the issue and unpause the agent.`,
+      { enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs },
+    );
+
+    // Block the issue directly — skip the normal escalation path to avoid
+    // creating a recovery sub-issue (which would itself enqueue a wake and
+    // risk re-entering the loop). This is a hard stop: human intervention is
+    // required before either the issue or the agent can resume.
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(issues)
+        .set({
+          status: "blocked",
+          updatedAt: now,
+        })
+        .where(eq(issues.id, input.issue.id))
+        .returning();
+
+      if (updated) {
+        await tx.insert(issueComments).values({
+          companyId: input.issue.companyId,
+          issueId: input.issue.id,
+          body: commentBody,
+          updatedAt: now,
+        });
+        await tx.insert(activityLog).values({
+          companyId: input.issue.companyId,
+          actorType: "system",
+          actorId: "system",
+          agentId: null,
+          runId: null,
+          action: "issue.updated",
+          entityType: "issue",
+          entityId: input.issue.id,
+          details: {
+            identifier: input.issue.identifier,
+            status: "blocked",
+            previousStatus: input.issue.status,
+            source: "recovery.per_issue_rate_limit",
+            enqueueCount: input.enqueueCount,
+            latestRunId: input.latestRun?.id ?? null,
+          },
+        });
+      }
+
+      const [pausedAgent] = await tx
+        .update(agents)
+        .set({
+          status: "paused",
+          pauseReason: comment,
+          pausedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(agents.id, input.agentId),
+            notInArray(agents.status, ["paused", "terminated"]),
+          ),
+        )
+        .returning();
+
+      if (auditRunId) {
+        await tx.insert(heartbeatRunWatchdogDecisions).values({
+          companyId: input.issue.companyId,
+          runId: auditRunId,
+          evaluationIssueId: input.issue.id,
+          decision: "rate_limited",
+          reason: comment,
+        });
+      }
+
+      return { escalated: Boolean(updated), paused: Boolean(pausedAgent) };
     });
   }
 
@@ -1621,6 +1737,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       successfulContinuationObserved: 0,
       orphanBlockersAssigned: 0,
       escalated: 0,
+      rateLimitTripped: 0,
       skipped: 0,
       issueIds: [] as string[],
     };
@@ -1711,6 +1828,28 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           continue;
         }
 
+        const assignmentEnqueueCount = await countIssueRecoveryEnqueuesInWindow(
+          issue.companyId,
+          agentId,
+          issue.id,
+          ISSUE_RECOVERY_RATE_WINDOW_MS,
+        );
+        if (assignmentEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
+          const { escalated: didEscalate } = await tripIssueRecoveryRateLimit({
+            issue,
+            agentId,
+            latestRun,
+            enqueueCount: assignmentEnqueueCount,
+          });
+          if (didEscalate) {
+            result.rateLimitTripped += 1;
+            result.issueIds.push(issue.id);
+          } else {
+            result.skipped += 1;
+          }
+          continue;
+        }
+
         if (await isInvocationBudgetBlocked(issue, agentId)) {
           result.skipped += 1;
           continue;
@@ -1778,6 +1917,28 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         });
         if (updated) {
           result.escalated += 1;
+          result.issueIds.push(issue.id);
+        } else {
+          result.skipped += 1;
+        }
+        continue;
+      }
+
+      const continuationEnqueueCount = await countIssueRecoveryEnqueuesInWindow(
+        issue.companyId,
+        agentId,
+        issue.id,
+        ISSUE_RECOVERY_RATE_WINDOW_MS,
+      );
+      if (continuationEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
+        const { escalated: didEscalate } = await tripIssueRecoveryRateLimit({
+          issue,
+          agentId,
+          latestRun,
+          enqueueCount: continuationEnqueueCount,
+        });
+        if (didEscalate) {
+          result.rateLimitTripped += 1;
           result.issueIds.push(issue.id);
         } else {
           result.skipped += 1;
