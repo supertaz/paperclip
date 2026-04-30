@@ -7459,7 +7459,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .where(and(
         eq(issues.companyId, companyId),
         eq(issues.assigneeAgentId, agentId),
-        sql`${issues.status} not in ('done', 'cancelled')`,
+        notInArray(issues.status, ["done", "cancelled"]),
       ));
 
     if (assignedRows.length === 0) return { totalAssigned: 0, available: 0 };
