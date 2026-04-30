@@ -3594,7 +3594,7 @@ export function issueService(db: Db) {
         })
         .onConflictDoNothing({
           target: issueComments.idempotencyKey,
-          where: sql`${issueComments.idempotencyKey} IS NOT NULL`,
+          where: sql.raw('"idempotency_key" IS NOT NULL'),
         })
         .returning();
 

@@ -62,6 +62,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             agentRecord &&
             agentRecord.companyId === run.companyId &&
             agentRecord.status !== "terminated" &&
+            agentRecord.status !== "suspended" &&
             agentRecord.status !== "pending_approval" &&
             run.status === "running"
           ) {

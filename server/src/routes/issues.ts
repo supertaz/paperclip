@@ -1973,8 +1973,8 @@ export function issueRoutes(
         shouldImplicitlyMoveCommentedIssueToTodo({
           issueStatus: existing.status,
           assigneeAgentId: requestedAssigneeAgentId,
-          actorType: actor.actorType === "agent" ? "agent" : actor.actorType,
-          actorId: actor.agentId ?? actor.actorId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
         }));
     const updateReferenceSummaryBefore = titleOrDescriptionChanged
       ? await issueReferencesSvc.listIssueReferenceSummary(existing.id)
@@ -3377,8 +3377,8 @@ export function issueRoutes(
       shouldImplicitlyMoveCommentedIssueToTodo({
         issueStatus: issue.status,
         assigneeAgentId: issue.assigneeAgentId,
-        actorType: actor.actorType === "agent" ? "agent" : actor.actorType,
-        actorId: actor.agentId ?? actor.actorId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
       });
     const hasUnresolvedFirstClassBlockers =
       isBlocked && effectiveMoveToTodoRequested
