@@ -114,12 +114,13 @@ type IssueRouteHeartbeat = ReturnType<typeof heartbeatService>;
 
 async function resolveActorForIssue(
   actor: IssueRouteActor,
+  actorSource: Request["actor"]["source"],
   companyId: string,
   heartbeat: IssueRouteHeartbeat,
 ) {
   let resolvedActorAgentId: string | null = actor.agentId;
   let resolvedActorIsAgent = actor.actorType === "agent";
-  if (actor.actorType !== "agent" && actor.runId) {
+  if (actor.actorType !== "agent" && actor.runId && actorSource === "local_implicit") {
     const run = await heartbeat.getRun(actor.runId);
     if (run?.agentId && run.companyId === companyId) {
       resolvedActorAgentId = run.agentId;
@@ -1961,7 +1962,7 @@ export function issueRoutes(
     const actor = getActorInfo(req);
 
     const { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent } =
-      await resolveActorForIssue(actor, existing.companyId, heartbeat);
+      await resolveActorForIssue(actor, req.actor.source, existing.companyId, heartbeat);
 
     const isClosed = isClosedIssueStatus(existing.status);
     const isBlocked = existing.status === "blocked";
@@ -3393,7 +3394,7 @@ export function issueRoutes(
     const actor = getActorInfo(req);
 
     const { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent } =
-      await resolveActorForIssue(actor, issue.companyId, heartbeat);
+      await resolveActorForIssue(actor, req.actor.source, issue.companyId, heartbeat);
 
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
