@@ -51,7 +51,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           .where(eq(heartbeatRuns.id, runIdHeader))
           .then((rows) => rows[0] ?? null);
 
-        if (run?.agentId) {
+        if (run?.agentId && run.status === "running") {
           const agentRecord = await db
             .select()
             .from(agents)
@@ -61,10 +61,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           if (
             agentRecord &&
             agentRecord.companyId === run.companyId &&
-            agentRecord.status !== "terminated" &&
-            agentRecord.status !== "suspended" &&
-            agentRecord.status !== "pending_approval" &&
-            run.status === "running"
+            agentRecord.status === "active"
           ) {
             req.actor = {
               type: "agent",
