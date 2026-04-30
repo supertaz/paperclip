@@ -45,6 +45,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             id: heartbeatRuns.id,
             agentId: heartbeatRuns.agentId,
             companyId: heartbeatRuns.companyId,
+            status: heartbeatRuns.status,
           })
           .from(heartbeatRuns)
           .where(eq(heartbeatRuns.id, runIdHeader))
@@ -61,7 +62,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             agentRecord &&
             agentRecord.companyId === run.companyId &&
             agentRecord.status !== "terminated" &&
-            agentRecord.status !== "pending_approval"
+            agentRecord.status !== "pending_approval" &&
+            run.status === "running"
           ) {
             req.actor = {
               type: "agent",

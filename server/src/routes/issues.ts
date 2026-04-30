@@ -109,34 +109,6 @@ type ExecutionStageWakeContext = {
   lastDecisionOutcome: ParsedExecutionState["lastDecisionOutcome"];
   allowedActions: string[];
 };
-type IssueRouteActor = ReturnType<typeof getActorInfo>;
-type IssueRouteHeartbeat = ReturnType<typeof heartbeatService>;
-
-async function resolveActorForIssue(
-  actor: IssueRouteActor,
-  actorSource: Request["actor"]["source"],
-  companyId: string,
-  heartbeat: IssueRouteHeartbeat,
-) {
-  let resolvedActorAgentId: string | null = actor.agentId;
-  let resolvedActorIsAgent = actor.actorType === "agent";
-  if (actor.actorType !== "agent" && actor.runId && actorSource === "local_implicit") {
-    const run = await heartbeat.getRun(actor.runId);
-    if (run?.agentId && run.companyId === companyId) {
-      resolvedActorAgentId = run.agentId;
-      resolvedActorIsAgent = true;
-    }
-  }
-  const resolvedActor: IssueRouteActor = resolvedActorIsAgent
-    ? {
-        actorType: "agent",
-        actorId: resolvedActorAgentId ?? actor.actorId,
-        agentId: resolvedActorAgentId ?? actor.agentId,
-        runId: actor.runId,
-      }
-    : actor;
-  return { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent };
-}
 
 function executionPrincipalsEqual(
   left: ParsedExecutionState["currentParticipant"] | null,
@@ -1960,9 +1932,9 @@ export function issueRoutes(
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
 
     const actor = getActorInfo(req);
-
-    const { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent } =
-      await resolveActorForIssue(actor, req.actor.source, existing.companyId, heartbeat);
+    const resolvedActor = actor;
+    const resolvedActorAgentId = actor.agentId;
+    const resolvedActorIsAgent = actor.actorType === "agent";
 
     const isClosed = isClosedIssueStatus(existing.status);
     const isBlocked = existing.status === "blocked";
@@ -3392,9 +3364,9 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
-
-    const { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent } =
-      await resolveActorForIssue(actor, req.actor.source, issue.companyId, heartbeat);
+    const resolvedActor = actor;
+    const resolvedActorAgentId = actor.agentId;
+    const resolvedActorIsAgent = actor.actorType === "agent";
 
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
