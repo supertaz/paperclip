@@ -109,6 +109,33 @@ type ExecutionStageWakeContext = {
   lastDecisionOutcome: ParsedExecutionState["lastDecisionOutcome"];
   allowedActions: string[];
 };
+type IssueRouteActor = ReturnType<typeof getActorInfo>;
+type IssueRouteHeartbeat = ReturnType<typeof heartbeatService>;
+
+async function resolveActorForIssue(
+  actor: IssueRouteActor,
+  companyId: string,
+  heartbeat: IssueRouteHeartbeat,
+) {
+  let resolvedActorAgentId: string | null = actor.agentId;
+  let resolvedActorIsAgent = actor.actorType === "agent";
+  if (actor.actorType !== "agent" && actor.runId) {
+    const run = await heartbeat.getRun(actor.runId);
+    if (run?.agentId && run.companyId === companyId) {
+      resolvedActorAgentId = run.agentId;
+      resolvedActorIsAgent = true;
+    }
+  }
+  const resolvedActor: IssueRouteActor = resolvedActorIsAgent
+    ? {
+        actorType: "agent",
+        actorId: resolvedActorAgentId ?? actor.actorId,
+        agentId: resolvedActorAgentId ?? actor.agentId,
+        runId: actor.runId,
+      }
+    : actor;
+  return { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent };
+}
 
 function executionPrincipalsEqual(
   left: ParsedExecutionState["currentParticipant"] | null,
@@ -1933,24 +1960,8 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
 
-    // Recover true agent when bearer token was omitted but x-paperclip-run-id was sent.
-    let resolvedActorAgentId: string | null = actor.agentId;
-    let resolvedActorIsAgent = actor.actorType === "agent";
-    if (actor.actorType !== "agent" && actor.runId) {
-      const run = await heartbeat.getRun(actor.runId);
-      if (run?.agentId && run.companyId === existing.companyId) {
-        resolvedActorAgentId = run.agentId;
-        resolvedActorIsAgent = true;
-      }
-    }
-    const resolvedActor: ReturnType<typeof getActorInfo> = resolvedActorIsAgent
-      ? {
-          actorType: "agent",
-          actorId: resolvedActorAgentId ?? actor.actorId,
-          agentId: resolvedActorAgentId ?? actor.agentId,
-          runId: actor.runId,
-        }
-      : actor;
+    const { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent } =
+      await resolveActorForIssue(actor, existing.companyId, heartbeat);
 
     const isClosed = isClosedIssueStatus(existing.status);
     const isBlocked = existing.status === "blocked";
@@ -2375,9 +2386,9 @@ export function issueRoutes(
     if (approverChanges.addedParticipants.length > 0 || approverChanges.removedParticipants.length > 0) {
       await logActivity(db, {
         companyId: issue.companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
+        actorType: resolvedActor.actorType,
+        actorId: resolvedActor.actorId,
+        agentId: resolvedActor.agentId,
         runId: actor.runId,
         action: "issue.approvers_updated",
         entityType: "issue",
@@ -2393,8 +2404,8 @@ export function issueRoutes(
 
     if (issue.status === "done" && existing.status !== "done") {
       const tc = getTelemetryClient();
-      if (tc && actor.agentId) {
-        const actorAgent = await agentsSvc.getById(actor.agentId);
+      if (tc && resolvedActorAgentId) {
+        const actorAgent = await agentsSvc.getById(resolvedActorAgentId);
         if (actorAgent) {
           const model = typeof actorAgent.adapterConfig?.model === "string" ? actorAgent.adapterConfig.model : undefined;
           trackAgentTaskCompleted(tc, {
@@ -3381,26 +3392,8 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
 
-    // When an agent omits its bearer token but correctly sends x-paperclip-run-id,
-    // the server resolves the actor as board. Recover the true agent from the run
-    // record so attribution and self-wake suppression work correctly.
-    let resolvedActorAgentId: string | null = actor.agentId;
-    let resolvedActorIsAgent = actor.actorType === "agent";
-    if (actor.actorType !== "agent" && actor.runId) {
-      const run = await heartbeat.getRun(actor.runId);
-      if (run?.agentId && run.companyId === issue.companyId) {
-        resolvedActorAgentId = run.agentId;
-        resolvedActorIsAgent = true;
-      }
-    }
-    const resolvedActor: ReturnType<typeof getActorInfo> = resolvedActorIsAgent
-      ? {
-          actorType: "agent",
-          actorId: resolvedActorAgentId ?? actor.actorId,
-          agentId: resolvedActorAgentId ?? actor.agentId,
-          runId: actor.runId,
-        }
-      : actor;
+    const { resolvedActor, resolvedActorAgentId, resolvedActorIsAgent } =
+      await resolveActorForIssue(actor, issue.companyId, heartbeat);
 
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;

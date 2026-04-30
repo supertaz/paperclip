@@ -3592,7 +3592,10 @@ export function issueService(db: Db) {
           idempotencyKey,
           body: redactedBody,
         })
-        .onConflictDoNothing()
+        .onConflictDoNothing({
+          target: issueComments.idempotencyKey,
+          where: sql`${issueComments.idempotencyKey} IS NOT NULL`,
+        })
         .returning();
 
       const [comment] = inserted.length > 0 || !idempotencyKey
