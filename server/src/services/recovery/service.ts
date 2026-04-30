@@ -420,6 +420,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     companyId: string,
     agentId: string,
     issueId: string,
+    retryReason: "assignment_recovery" | "issue_continuation_needed",
     windowMs: number,
   ) {
     const since = new Date(Date.now() - windowMs);
@@ -431,7 +432,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           eq(heartbeatRuns.companyId, companyId),
           eq(heartbeatRuns.agentId, agentId),
           sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
-          sql`${heartbeatRuns.contextSnapshot} ->> 'retryReason' IN ('assignment_recovery', 'issue_continuation_needed')`,
+          sql`${heartbeatRuns.contextSnapshot} ->> 'retryReason' = ${retryReason}`,
           gt(heartbeatRuns.createdAt, since),
         ),
       );
@@ -1859,6 +1860,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           issue.companyId,
           agentId,
           issue.id,
+          "assignment_recovery",
           ISSUE_RECOVERY_RATE_WINDOW_MS,
         );
         if (assignmentEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
@@ -1997,6 +1999,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         issue.companyId,
         agentId,
         issue.id,
+        "issue_continuation_needed",
         ISSUE_RECOVERY_RATE_WINDOW_MS,
       );
       if (continuationEnqueueCount >= ISSUE_RECOVERY_RATE_CAP) {
