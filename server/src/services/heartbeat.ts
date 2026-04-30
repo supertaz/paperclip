@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -6490,22 +6490,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // Secondary path: agent omitted bearer token so actor resolved as board,
     // but the triggering comment's createdByRunId belongs to this agent.
     if (opts.requestedByActorType !== "agent" && wakeCommentId && source === "automation") {
-      const comment = await db
-        .select({ createdByRunId: issueComments.createdByRunId })
+      const commentRun = await db
+        .select({ agentId: heartbeatRuns.agentId })
         .from(issueComments)
-        .where(eq(issueComments.id, wakeCommentId))
+        .innerJoin(heartbeatRuns, eq(issueComments.createdByRunId, heartbeatRuns.id))
+        .where(and(eq(issueComments.id, wakeCommentId), isNotNull(issueComments.createdByRunId)))
         .then((rows) => rows[0] ?? null);
-
-      if (comment?.createdByRunId) {
-        const commentRun = await db
-          .select({ agentId: heartbeatRuns.agentId })
-          .from(heartbeatRuns)
-          .where(eq(heartbeatRuns.id, comment.createdByRunId))
-          .then((rows) => rows[0] ?? null);
-        if (commentRun?.agentId === agentId) {
-          await writeSkippedRequest("self_event_suppression_via_run");
-          return null;
-        }
+      if (commentRun?.agentId === agentId) {
+        await writeSkippedRequest("self_event_suppression_via_run");
+        return null;
       }
     }
 
