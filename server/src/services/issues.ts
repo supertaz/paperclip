@@ -3572,13 +3572,13 @@ export function issueService(db: Db) {
       };
       const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
 
-      // Deduplicate agent-authored comments: if the same run posts the same body
+      // Deduplicate agent-authored comments: if the same run posts the same raw body
       // at any point during the run's lifetime, return the existing comment instead
       // of inserting a new one. The unique partial index on idempotency_key makes
       // this atomic — concurrent duplicate inserts are collapsed at the DB level
       // via ON CONFLICT DO NOTHING.
       const idempotencyKey = actor.runId
-        ? createHash("sha256").update(`${actor.runId}:${issueId}:${redactedBody}`).digest("hex")
+        ? createHash("sha256").update(`${actor.runId}:${issueId}:${body}`).digest("hex")
         : null;
 
       const inserted = await db
