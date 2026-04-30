@@ -50,11 +50,17 @@ export function Dashboard() {
     enabled: !!selectedCompanyId,
   });
 
+  const { data: boardAccess } = useQuery({
+    queryKey: queryKeys.access.currentBoardAccess,
+    queryFn: () => accessApi.getCurrentBoardAccess(),
+    retry: false,
+  });
+
   const { data: agentQueuedCounts } = useQuery({
     queryKey: [...queryKeys.instance.agentQueuedCounts, "dashboard"],
     queryFn: () => instanceSettingsApi.getAgentQueuedCounts(),
     refetchInterval: 15_000,
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && !!boardAccess?.isInstanceAdmin,
   });
 
   useEffect(() => {
