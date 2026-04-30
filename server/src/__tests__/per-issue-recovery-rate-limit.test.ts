@@ -74,7 +74,7 @@ describeEmbeddedPostgres("per-issue recovery rate limit", () => {
     await tempDb?.cleanup();
   });
 
-  async function seedIssueWithRecentRuns(runCount: number) {
+  async function seedInProgressIssueWithRecentContinuationRuns(runCount: number) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issueId = randomUUID();
@@ -132,13 +132,15 @@ describeEmbeddedPostgres("per-issue recovery rate limit", () => {
     return { companyId, agentId, issueId };
   }
 
-  it("trips rate limit, escalates to blocked, and pauses agent after 5 enqueues in window", async () => {
-    const { issueId, agentId } = await seedIssueWithRecentRuns(5);
+  it("trips the continuation-path rate limit, escalates to blocked, and pauses agent after 5 enqueues in window", async () => {
+    const { issueId, agentId } = await seedInProgressIssueWithRecentContinuationRuns(5);
     const enqueueWakeup = vi.fn();
     const recovery = recoveryService(db, { enqueueWakeup });
 
     const result = await recovery.reconcileStrandedAssignedIssues();
 
+    expect(result.assignmentDispatched).toBe(0);
+    expect(result.dispatchRequeued).toBe(0);
     expect(result.rateLimitTripped).toBe(1);
     expect(result.continuationRequeued).toBe(0);
     expect(enqueueWakeup).not.toHaveBeenCalled();
@@ -159,12 +161,14 @@ describeEmbeddedPostgres("per-issue recovery rate limit", () => {
   });
 
   it("does not trip when fewer than 5 enqueues in window", async () => {
-    const { issueId } = await seedIssueWithRecentRuns(4);
+    const { issueId } = await seedInProgressIssueWithRecentContinuationRuns(4);
     const enqueueWakeup = vi.fn().mockResolvedValue({ id: randomUUID() });
     const recovery = recoveryService(db, { enqueueWakeup });
 
     const result = await recovery.reconcileStrandedAssignedIssues();
 
+    expect(result.assignmentDispatched).toBe(0);
+    expect(result.dispatchRequeued).toBe(0);
     expect(result.rateLimitTripped).toBe(0);
     expect(result.continuationRequeued).toBe(1);
 
