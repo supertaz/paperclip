@@ -1932,9 +1932,6 @@ export function issueRoutes(
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
 
     const actor = getActorInfo(req);
-    const resolvedActor = actor;
-    const resolvedActorAgentId = actor.agentId;
-    const resolvedActorIsAgent = actor.actorType === "agent";
 
     const isClosed = isClosedIssueStatus(existing.status);
     const isBlocked = existing.status === "blocked";
@@ -1976,8 +1973,8 @@ export function issueRoutes(
         shouldImplicitlyMoveCommentedIssueToTodo({
           issueStatus: existing.status,
           assigneeAgentId: requestedAssigneeAgentId,
-          actorType: resolvedActorIsAgent ? "agent" : actor.actorType,
-          actorId: resolvedActorAgentId ?? actor.actorId,
+          actorType: actor.actorType === "agent" ? "agent" : actor.actorType,
+          actorId: actor.agentId ?? actor.actorId,
         }));
     const updateReferenceSummaryBefore = titleOrDescriptionChanged
       ? await issueReferencesSvc.listIssueReferenceSummary(existing.id)
@@ -2339,9 +2336,9 @@ export function issueRoutes(
     if (reviewerChanges.addedParticipants.length > 0 || reviewerChanges.removedParticipants.length > 0) {
       await logActivity(db, {
         companyId: issue.companyId,
-        actorType: resolvedActor.actorType,
-        actorId: resolvedActor.actorId,
-        agentId: resolvedActor.agentId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
         runId: actor.runId,
         action: "issue.reviewers_updated",
         entityType: "issue",
@@ -2359,9 +2356,9 @@ export function issueRoutes(
     if (approverChanges.addedParticipants.length > 0 || approverChanges.removedParticipants.length > 0) {
       await logActivity(db, {
         companyId: issue.companyId,
-        actorType: resolvedActor.actorType,
-        actorId: resolvedActor.actorId,
-        agentId: resolvedActor.agentId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
         runId: actor.runId,
         action: "issue.approvers_updated",
         entityType: "issue",
@@ -2377,8 +2374,8 @@ export function issueRoutes(
 
     if (issue.status === "done" && existing.status !== "done") {
       const tc = getTelemetryClient();
-      if (tc && resolvedActorAgentId) {
-        const actorAgent = await agentsSvc.getById(resolvedActorAgentId);
+      if (tc && actor.agentId) {
+        const actorAgent = await agentsSvc.getById(actor.agentId);
         if (actorAgent) {
           const model = typeof actorAgent.adapterConfig?.model === "string" ? actorAgent.adapterConfig.model : undefined;
           trackAgentTaskCompleted(tc, {
@@ -2396,8 +2393,8 @@ export function issueRoutes(
       const commentReferenceSummaryBefore = updateReferenceSummaryAfter
         ?? await issueReferencesSvc.listIssueReferenceSummary(issue.id);
       comment = await svc.addComment(id, commentBody, {
-        agentId: resolvedActorAgentId ?? undefined,
-        userId: resolvedActorIsAgent ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
+        agentId: actor.agentId ?? undefined,
+        userId: actor.actorType === "agent" ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
         runId: actor.runId,
       });
       await issueReferencesSvc.syncComment(comment.id);
@@ -2416,9 +2413,9 @@ export function issueRoutes(
 
       await logActivity(db, {
         companyId: issue.companyId,
-        actorType: resolvedActor.actorType,
-        actorId: resolvedActor.actorId,
-        agentId: resolvedActor.agentId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
         runId: actor.runId,
         action: "issue.comment_added",
         entityType: "issue",
@@ -2444,14 +2441,14 @@ export function issueRoutes(
         issue,
         comment,
         {
-          agentId: resolvedActor.agentId,
-          userId: resolvedActor.actorType === "user" ? resolvedActor.actorId : null,
+          agentId: actor.agentId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
         },
       );
       await logExpiredRequestConfirmations({
         issue,
         interactions: expiredInteractions,
-        actor: resolvedActor,
+        actor,
         source: "issue.comment",
       });
 
@@ -2486,8 +2483,8 @@ export function issueRoutes(
       previousState: previousExecutionState,
       nextState: nextExecutionState,
       interruptedRunId,
-      requestedByActorType: resolvedActor.actorType,
-      requestedByActorId: resolvedActor.actorId,
+      requestedByActorType: actor.actorType,
+      requestedByActorId: actor.actorId,
     });
 
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
@@ -2516,8 +2513,8 @@ export function issueRoutes(
             ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
-          requestedByActorType: resolvedActor.actorType,
-          requestedByActorId: resolvedActor.actorId,
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
           contextSnapshot: {
             issueId: issue.id,
             ...(comment
@@ -2549,8 +2546,8 @@ export function issueRoutes(
             ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
-          requestedByActorType: resolvedActor.actorType,
-          requestedByActorId: resolvedActor.actorId,
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
           contextSnapshot: {
             issueId: issue.id,
             source: "issue.status_change",
@@ -2562,7 +2559,7 @@ export function issueRoutes(
 
       if (commentBody && comment) {
         const assigneeId = issue.assigneeAgentId;
-        const selfComment = resolvedActorIsAgent && resolvedActorAgentId === assigneeId;
+        const selfComment = actor.actorType === "agent" && actor.agentId === assigneeId;
         const skipAssigneeCommentWake = selfComment || isClosed;
 
         if (assigneeId && !assigneeChanged && (reopened || !skipAssigneeCommentWake)) {
@@ -2578,8 +2575,8 @@ export function issueRoutes(
               ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
-            requestedByActorType: resolvedActor.actorType,
-            requestedByActorId: resolvedActor.actorId,
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
             contextSnapshot: {
               issueId: id,
               taskId: id,
@@ -2602,14 +2599,14 @@ export function issueRoutes(
         }
 
         for (const mentionedId of mentionedIds) {
-          if (resolvedActorIsAgent && resolvedActorAgentId === mentionedId) continue;
+          if (actor.actorType === "agent" && actor.agentId === mentionedId) continue;
           addWakeup(mentionedId, {
             source: "automation",
             triggerDetail: "system",
             reason: "issue_comment_mentioned",
             payload: { issueId: id, commentId: comment.id },
-            requestedByActorType: resolvedActor.actorType,
-            requestedByActorId: resolvedActor.actorId,
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
             contextSnapshot: {
               issueId: id,
               taskId: id,
@@ -2635,8 +2632,8 @@ export function issueRoutes(
               resolvedBlockerIssueId: issue.id,
               blockerIssueIds: dependent.blockerIssueIds,
             },
-            requestedByActorType: resolvedActor.actorType,
-            requestedByActorId: resolvedActor.actorId,
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
             contextSnapshot: {
               issueId: dependent.id,
               taskId: dependent.id,
@@ -2665,8 +2662,8 @@ export function issueRoutes(
               childIssueSummaries: parent.childIssueSummaries,
               childIssueSummaryTruncated: parent.childIssueSummaryTruncated,
             },
-            requestedByActorType: resolvedActor.actorType,
-            requestedByActorId: resolvedActor.actorId,
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
             contextSnapshot: {
               issueId: parent.id,
               taskId: parent.id,
@@ -3364,9 +3361,6 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
-    const resolvedActor = actor;
-    const resolvedActorAgentId = actor.agentId;
-    const resolvedActorIsAgent = actor.actorType === "agent";
 
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
@@ -3383,8 +3377,8 @@ export function issueRoutes(
       shouldImplicitlyMoveCommentedIssueToTodo({
         issueStatus: issue.status,
         assigneeAgentId: issue.assigneeAgentId,
-        actorType: resolvedActorIsAgent ? "agent" : actor.actorType,
-        actorId: resolvedActorAgentId ?? actor.actorId,
+        actorType: actor.actorType === "agent" ? "agent" : actor.actorType,
+        actorId: actor.agentId ?? actor.actorId,
       });
     const hasUnresolvedFirstClassBlockers =
       isBlocked && effectiveMoveToTodoRequested
@@ -3412,9 +3406,9 @@ export function issueRoutes(
 
       await logActivity(db, {
         companyId: currentIssue.companyId,
-        actorType: resolvedActor.actorType,
-        actorId: resolvedActor.actorId,
-        agentId: resolvedActor.agentId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
         runId: actor.runId,
         action: "issue.updated",
         entityType: "issue",
@@ -3457,8 +3451,8 @@ export function issueRoutes(
     }
 
     const comment = await svc.addComment(id, req.body.body, {
-      agentId: resolvedActorAgentId ?? undefined,
-      userId: resolvedActorIsAgent ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
+      agentId: actor.agentId ?? undefined,
+      userId: actor.actorType === "agent" ? undefined : (actor.actorType === "user" ? actor.actorId : undefined),
       runId: actor.runId,
     });
     await issueReferencesSvc.syncComment(comment.id);
@@ -3475,9 +3469,9 @@ export function issueRoutes(
 
     await logActivity(db, {
       companyId: currentIssue.companyId,
-      actorType: resolvedActor.actorType,
-      actorId: resolvedActor.actorId,
-      agentId: resolvedActor.agentId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
       runId: actor.runId,
       action: "issue.comment_added",
       entityType: "issue",
@@ -3502,14 +3496,14 @@ export function issueRoutes(
       currentIssue,
       comment,
       {
-        agentId: resolvedActor.agentId,
-        userId: resolvedActor.actorType === "user" ? resolvedActor.actorId : null,
+        agentId: actor.agentId,
+        userId: actor.actorType === "user" ? actor.actorId : null,
       },
     );
     await logExpiredRequestConfirmations({
       issue: currentIssue,
       interactions: expiredInteractions,
-      actor: resolvedActor,
+      actor,
       source: "issue.comment",
     });
 
@@ -3517,7 +3511,7 @@ export function issueRoutes(
     void (async () => {
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
       const assigneeId = currentIssue.assigneeAgentId;
-      const selfComment = resolvedActorIsAgent && resolvedActorAgentId === assigneeId;
+      const selfComment = actor.actorType === "agent" && actor.agentId === assigneeId;
       const skipWake = selfComment || isClosed;
       if (assigneeId && (reopened || !skipWake)) {
         if (reopened) {
@@ -3533,8 +3527,8 @@ export function issueRoutes(
               ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
-            requestedByActorType: resolvedActor.actorType,
-            requestedByActorId: resolvedActor.actorId,
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
             contextSnapshot: {
               issueId: currentIssue.id,
               taskId: currentIssue.id,
@@ -3559,8 +3553,8 @@ export function issueRoutes(
               ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
-            requestedByActorType: resolvedActor.actorType,
-            requestedByActorId: resolvedActor.actorId,
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
             contextSnapshot: {
               issueId: currentIssue.id,
               taskId: currentIssue.id,
@@ -3584,14 +3578,14 @@ export function issueRoutes(
 
       for (const mentionedId of mentionedIds) {
         if (wakeups.has(mentionedId)) continue;
-        if (resolvedActorIsAgent && resolvedActorAgentId === mentionedId) continue;
+        if (actor.actorType === "agent" && actor.agentId === mentionedId) continue;
         wakeups.set(mentionedId, {
           source: "automation",
           triggerDetail: "system",
           reason: "issue_comment_mentioned",
           payload: { issueId: id, commentId: comment.id },
-          requestedByActorType: resolvedActor.actorType,
-          requestedByActorId: resolvedActor.actorId,
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
           contextSnapshot: {
             issueId: id,
             taskId: id,
