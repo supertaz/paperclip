@@ -6490,15 +6490,22 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     // Secondary path: agent omitted bearer token so actor resolved as board,
     // but the triggering comment's createdByRunId belongs to this agent.
     if (opts.requestedByActorType !== "agent" && wakeCommentId && source === "automation") {
-      const commentRun = await db
-        .select({ agentId: heartbeatRuns.agentId })
+      const comment = await db
+        .select({ createdByRunId: issueComments.createdByRunId })
         .from(issueComments)
-        .innerJoin(heartbeatRuns, eq(issueComments.createdByRunId, heartbeatRuns.id))
         .where(eq(issueComments.id, wakeCommentId))
         .then((rows) => rows[0] ?? null);
-      if (commentRun?.agentId === agentId) {
-        await writeSkippedRequest("self_event_suppression_via_run");
-        return null;
+
+      if (comment?.createdByRunId) {
+        const commentRun = await db
+          .select({ agentId: heartbeatRuns.agentId })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, comment.createdByRunId))
+          .then((rows) => rows[0] ?? null);
+        if (commentRun?.agentId === agentId) {
+          await writeSkippedRequest("self_event_suppression_via_run");
+          return null;
+        }
       }
     }
 
