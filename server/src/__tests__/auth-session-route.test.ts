@@ -94,6 +94,8 @@ describe("actorMiddleware authenticated session profile", () => {
       type: "agent",
       agentId: "22222222-2222-4222-8222-222222222222",
       companyId: "11111111-1111-4111-8111-111111111111",
+      companyIds: ["11111111-1111-4111-8111-111111111111"],
+      memberships: [],
       runId: "77777777-7777-4777-8777-777777777777",
       source: "agent_run_id",
     });
