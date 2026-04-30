@@ -52,7 +52,7 @@ export function Dashboard() {
 
   const { data: liveRuns } = useQuery({
     queryKey: [...queryKeys.liveRuns(selectedCompanyId ?? "__none__"), "dashboard-queued-count"],
-    queryFn: () => heartbeatsApi.liveRunsForCompany(selectedCompanyId!, { minCount: 0, limit: 0 }),
+    queryFn: () => heartbeatsApi.liveRunsForCompany(selectedCompanyId!, { minCount: 0 }),
     refetchInterval: 15_000,
     enabled: !!selectedCompanyId,
   });
@@ -269,7 +269,7 @@ export function Dashboard() {
               icon={Clock}
               value={companyQueuedCount}
               label="Queued Runs"
-              to="/instance/settings/system-health"
+              to="/instance/settings/health"
               description={
                 <span>
                   {activeAgentCount} active agent{activeAgentCount !== 1 ? "s" : ""}
