@@ -7697,15 +7697,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // Pure-task agents (zero assigned issues) are unaffected: totalAssigned === 0
         // falls through to the normal enqueue path.
         const agentNameKey = normalizeAgentNameKey(agent.name);
-        if (!agentNameKey) continue;
-        const issueAvailability = await countIssueAvailabilityForTimerAgent(agent.id, agent.companyId, agentNameKey);
-        if (issueAvailability.totalAssigned > 0 && issueAvailability.available === 0) {
-          logger.debug(
-            { agentId: agent.id, totalAssigned: issueAvailability.totalAssigned },
-            "timer tick skipped: agent has assigned issues, all owned by other executions",
-          );
-          skipped += 1;
-          continue;
+        if (agentNameKey) {
+          const issueAvailability = await countIssueAvailabilityForTimerAgent(agent.id, agent.companyId, agentNameKey);
+          if (issueAvailability.totalAssigned > 0 && issueAvailability.available === 0) {
+            logger.debug(
+              { agentId: agent.id, totalAssigned: issueAvailability.totalAssigned },
+              "timer tick skipped: agent has assigned issues, all owned by other executions",
+            );
+            skipped += 1;
+            continue;
+          }
         }
 
         const run = await enqueueWakeup(agent.id, {
