@@ -88,6 +88,12 @@ describe("buildCodexExecArgs", () => {
     expect(result.args).not.toContain('model_reasoning_effort="low"');
   });
 
+  it("prefers reasoningEffort over effort alias", () => {
+    const result = buildCodexExecArgs({ reasoningEffort: "medium", effort: "low" });
+    expect(result.args).toContain('model_reasoning_effort="medium"');
+    expect(result.args).not.toContain('model_reasoning_effort="low"');
+  });
+
   it("ignores fast mode for unsupported models", () => {
     const result = buildCodexExecArgs({
       model: "gpt-5.3-codex",
