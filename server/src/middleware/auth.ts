@@ -70,6 +70,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
               type: "agent",
               agentId: run.agentId,
               companyId: run.companyId,
+              companyIds: [run.companyId],
+              memberships: [],
               keyId: undefined,
               runId: run.id,
               source: "agent_run_id",

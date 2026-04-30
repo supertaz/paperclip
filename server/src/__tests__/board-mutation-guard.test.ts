@@ -28,6 +28,9 @@ function createApp(
   app.post("/api/companies/company-1/issues", (_req, res) => {
     res.status(204).end();
   });
+  app.post("/api/projects/project-1/issues", (_req, res) => {
+    res.status(204).end();
+  });
   app.get("/read", (_req, res) => {
     res.status(204).end();
   });
@@ -90,6 +93,15 @@ describe("boardMutationGuard", () => {
   it("blocks local implicit issue creation without browser origin", async () => {
     const app = createApp("board", "local_implicit");
     const res = await request(app).post("/api/companies/company-1/issues").send({ title: "agent output" });
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "Issue mutation requires trusted browser origin or authenticated actor",
+    });
+  });
+
+  it("blocks local implicit issue mutations on nested issue route families", async () => {
+    const app = createApp("board", "local_implicit");
+    const res = await request(app).post("/api/projects/project-1/issues").send({ title: "agent output" });
     expect(res.status).toBe(403);
     expect(res.body).toEqual({
       error: "Issue mutation requires trusted browser origin or authenticated actor",

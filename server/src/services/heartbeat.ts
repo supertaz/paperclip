@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -6494,7 +6494,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         .select({ agentId: heartbeatRuns.agentId })
         .from(issueComments)
         .innerJoin(heartbeatRuns, eq(issueComments.createdByRunId, heartbeatRuns.id))
-        .where(and(eq(issueComments.id, wakeCommentId), isNotNull(issueComments.createdByRunId)))
+        .where(eq(issueComments.id, wakeCommentId))
         .then((rows) => rows[0] ?? null);
       if (commentRun?.agentId === agentId) {
         await writeSkippedRequest("self_event_suppression_via_run");

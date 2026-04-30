@@ -46,11 +46,7 @@ function isTrustedBoardMutationRequest(req: Request) {
 
 function isIssueMutationRequest(req: Request) {
   const path = (req.originalUrl || req.url || "").split("?")[0] ?? "";
-  // Keep this list in sync with issue mutation route families in server/src/routes/issues.ts.
-  return (
-    /^\/api\/issues(?:\/|$)/.test(path) ||
-    /^\/api\/companies\/[^/]+\/issues(?:\/|$)/.test(path)
-  );
+  return /^\/api(?:\/[^/]+)*\/issues(?:\/|$)/.test(path);
 }
 
 export function boardMutationGuard(): RequestHandler {
