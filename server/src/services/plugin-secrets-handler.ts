@@ -36,9 +36,11 @@
 import { eq, and, desc } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companySecrets, companySecretVersions, pluginConfig } from "@paperclipai/db";
-import type { SecretProvider } from "@paperclipai/shared";
+import { SECRET_PROVIDERS, type SecretProvider } from "@paperclipai/shared";
 import { getSecretProvider } from "../secrets/provider-registry.js";
 import { pluginRegistryService } from "./plugin-registry.js";
+import { secretService } from "./secrets.js";
+import { logActivity } from "./activity-log.js";
 import {
   collectSecretRefPaths,
   isUuidSecretRef,
@@ -70,6 +72,16 @@ function invalidSecretRef(secretRef: string): Error {
   err.name = "InvalidSecretRefError";
   return err;
 }
+
+// ---------------------------------------------------------------------------
+// Write-path validation constants
+// ---------------------------------------------------------------------------
+
+/** Allowed secret name characters: alphanumeric, underscore, dash. */
+const SECRET_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+/** Reserved name prefixes that plugins must not use. */
+const RESERVED_PREFIXES = ["PAPERCLIP_", "BETTER_AUTH_"] as const;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -160,6 +172,22 @@ export interface PluginSecretsService {
    *   the provider fails to resolve
    */
   resolve(params: PluginSecretsResolveParams): Promise<string>;
+
+  /**
+   * Create or rotate a named secret. Attribution uses actorType: "plugin".
+   *
+   * @param params - companyId, name, value, optional description
+   * @returns The secret UUID
+   */
+  write(params: { companyId: string; name: string; value: string; description?: string }): Promise<string>;
+
+  /**
+   * Delete a plugin-owned secret. No-ops if secret does not exist.
+   * Throws if the secret is owned by a different actor.
+   *
+   * @param params - companyId, name
+   */
+  delete(params: { companyId: string; name: string }): Promise<undefined>;
 }
 
 /**
@@ -307,6 +335,115 @@ export function createPluginSecretsHandler(
       });
 
       return resolved;
+    },
+
+    async write(params: { companyId: string; name: string; value: string; description?: string }): Promise<string> {
+      const { companyId, name, value, description } = params;
+      const pluginActorId = `plugin:${pluginId}`;
+
+      // ---------------------------------------------------------------
+      // 1. Input validation
+      // ---------------------------------------------------------------
+      if (!name || name.trim().length === 0) {
+        throw new Error("Secret name must not be empty.");
+      }
+      if (name.length > 255) {
+        throw new Error("Secret name must not exceed 255 characters.");
+      }
+      if (!SECRET_NAME_RE.test(name)) {
+        throw new Error("Secret name must only contain alphanumeric characters, underscores, and dashes.");
+      }
+      if (!value || value.trim().length === 0) {
+        throw new Error("Secret value must not be empty.");
+      }
+      if (Buffer.byteLength(value, "utf8") > 65_536) {
+        throw new Error("Secret value must not exceed 64 KiB.");
+      }
+
+      const upperName = name.toUpperCase();
+      for (const prefix of RESERVED_PREFIXES) {
+        if (upperName.startsWith(prefix)) {
+          throw new Error(`Secret name "${name}" is reserved for system use.`);
+        }
+      }
+
+      // ---------------------------------------------------------------
+      // 2. Resolve default provider from environment
+      // ---------------------------------------------------------------
+      const configuredDefaultProvider = process.env.PAPERCLIP_SECRETS_PROVIDER;
+      const defaultProvider = (
+        configuredDefaultProvider && SECRET_PROVIDERS.includes(configuredDefaultProvider as SecretProvider)
+          ? configuredDefaultProvider
+          : "local_encrypted"
+      ) as SecretProvider;
+
+      // ---------------------------------------------------------------
+      // 3. Ownership check — create or rotate
+      // ---------------------------------------------------------------
+      const svc = secretService(db);
+      const existing = await svc.getByName(companyId, name);
+
+      if (existing) {
+        if (existing.createdByUserId !== pluginActorId) {
+          throw new Error(`Collision: A secret named "${name}" already exists and was not created by this plugin.`);
+        }
+        const rotated = await svc.rotate(
+          existing.id,
+          { value, externalRef: existing.externalRef },
+          { userId: pluginActorId, agentId: null },
+        );
+        logActivity(db, {
+          companyId,
+          actorType: "plugin",
+          actorId: pluginActorId,
+          action: "secret.rotated",
+          entityType: "secret",
+          entityId: rotated.id,
+          details: { name },
+        }).catch(() => {});
+        return rotated.id;
+      }
+
+      const created = await svc.create(
+        companyId,
+        { name, provider: defaultProvider, value, description },
+        { userId: pluginActorId, agentId: null },
+      );
+      logActivity(db, {
+        companyId,
+        actorType: "plugin",
+        actorId: pluginActorId,
+        action: "secret.created",
+        entityType: "secret",
+        entityId: created.id,
+        details: { name },
+      }).catch(() => {});
+      return created.id;
+    },
+
+    async delete(params: { companyId: string; name: string }): Promise<undefined> {
+      const { companyId, name } = params;
+      const pluginActorId = `plugin:${pluginId}`;
+      const svc = secretService(db);
+      const existing = await svc.getByName(companyId, name);
+
+      if (!existing) return undefined;
+
+      if (existing.createdByUserId !== pluginActorId) {
+        throw new Error(`Secret "${name}" is not owned by this plugin and cannot be deleted.`);
+      }
+
+      await svc.remove(existing.id);
+      logActivity(db, {
+        companyId,
+        actorType: "plugin",
+        actorId: pluginActorId,
+        action: "secret.deleted",
+        entityType: "secret",
+        entityId: existing.id,
+        details: { name },
+      }).catch(() => {});
+      return undefined;
     },
   };
 }
