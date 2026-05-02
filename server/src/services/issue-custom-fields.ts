@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { issueCustomFields, issues } from "@paperclipai/db";
+import { issueCustomFields, issues, plugins } from "@paperclipai/db";
 import type { IssueCustomField } from "@paperclipai/plugin-sdk";
 import type { IssueCustomFieldType } from "@paperclipai/shared";
 import { notFound, unprocessable } from "../errors.js";
@@ -196,6 +196,45 @@ export function issueCustomFieldService(db: Db) {
         result.set(row.issueId, list);
       }
       return result;
+    },
+
+    async listAllForIssue(params: {
+      companyId: string;
+      issueId: string;
+    }): Promise<IssueCustomField[]> {
+      const { companyId, issueId } = params;
+
+      const rows = await db
+        .select({
+          pluginId: issueCustomFields.pluginId,
+          pluginKey: plugins.pluginKey,
+          packageName: plugins.packageName,
+          key: issueCustomFields.fieldKey,
+          type: issueCustomFields.fieldType,
+          label: issueCustomFields.fieldLabel,
+          valueText: issueCustomFields.valueText,
+          valueNumber: issueCustomFields.valueNumber,
+        })
+        .from(issueCustomFields)
+        .innerJoin(plugins, eq(issueCustomFields.pluginId, plugins.id))
+        .where(
+          and(
+            eq(issueCustomFields.companyId, companyId),
+            eq(issueCustomFields.issueId, issueId),
+            isNull(issueCustomFields.deletedAt),
+          ),
+        );
+
+      return rows.map((row) => ({
+        pluginId: row.pluginId,
+        pluginKey: row.pluginKey,
+        pluginDisplayName: row.packageName,
+        key: row.key,
+        type: row.type as IssueCustomFieldType,
+        label: row.label,
+        valueText: row.valueText ?? null,
+        valueNumber: row.valueNumber !== null ? Number(row.valueNumber) : null,
+      }));
     },
   };
 }
