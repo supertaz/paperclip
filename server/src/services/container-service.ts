@@ -82,6 +82,7 @@ interface RegistryEntry {
 export interface ContainerServiceOpts {
   driver: ContainerEngineDriver;
   concurrencyPerPlugin?: number;
+  maxLifetimeSec?: number;
 }
 
 export interface ContainerDetail {

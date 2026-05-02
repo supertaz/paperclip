@@ -1473,7 +1473,7 @@ export interface ContainerExecResult {
 export interface ContainerDetail {
   containerId: string;
   image: string;
-  status: ContainerStatus;
+  status: string;
   createdAt: string;
   labels: Record<string, string>;
 }
@@ -1483,7 +1483,7 @@ export interface PluginContainersClient {
   stop(containerId: string): Promise<void>;
   kill(containerId: string): Promise<void>;
   exec(containerId: string, cmd: string[], opts?: { timeoutMs?: number; env?: Record<string, string> }): Promise<ContainerExecResult>;
-  list(opts?: { status?: ContainerStatus }): Promise<ContainerDetail[]>;
+  list(opts?: { status?: string }): Promise<ContainerDetail[]>;
   inspect(containerId: string): Promise<ContainerDetail | null>;
 }
 
