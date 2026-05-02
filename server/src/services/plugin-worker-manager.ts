@@ -21,7 +21,8 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import type { PaperclipPluginManifestV1 } from "@paperclipai/shared";
+import type { PaperclipPluginManifestV1, PluginCgroupLimits } from "@paperclipai/shared";
+import type { PluginCgroupManager } from "./plugin-cgroup-manager.js";
 import {
   JSONRPC_VERSION,
   JSONRPC_ERROR_CODES,
@@ -183,6 +184,10 @@ export interface WorkerStartOptions {
    * The host wires this to the PluginStreamBus to fan out events to SSE clients.
    */
   onStreamNotification?: (method: string, params: Record<string, unknown>) => void;
+  /** Optional cgroup manager to confine the worker process. */
+  cgroupManager?: PluginCgroupManager;
+  /** Cgroup resource limits to apply when cgroupManager is provided. */
+  cgroupLimits?: PluginCgroupLimits;
 }
 
 /**
@@ -288,6 +293,8 @@ export interface WorkerDiagnostics {
   pendingRequests: number;
   lastCrashAt: number | null;
   nextRestartAt: number | null;
+  cgroupEnforced: boolean;
+  cgroupError?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +393,10 @@ export function createPluginWorkerHandle(
   // Crash tracking for exponential backoff
   let consecutiveCrashes = 0;
   let totalCrashes = 0;
+
+  // Cgroup state
+  let cgroupEnforced = false;
+  let cgroupError: string | undefined = undefined;
   let lastCrashAt: number | null = null;
   let backoffTimer: ReturnType<typeof setTimeout> | null = null;
   let nextRestartAt: number | null = null;
@@ -707,6 +718,18 @@ export function createPluginWorkerHandle(
 
     emitter.emit("exit", { pluginId, code, signal });
 
+    // Tear down the cgroup regardless of whether the exit was intentional.
+    // Fire-and-forget: teardown failure must not block the exit handler.
+    if (options.cgroupManager) {
+      cgroupEnforced = false;
+      options.cgroupManager.teardown(pluginId).catch((err) =>
+        log.error(
+          { err: err instanceof Error ? err.message : String(err), pluginId },
+          "cgroup teardown failed",
+        ),
+      );
+    }
+
     if (wasIntentional) {
       // Graceful stop — status is already "stopping" or will be set to "stopped"
       setStatus("stopped");
@@ -823,6 +846,21 @@ export function createPluginWorkerHandle(
     childProcess = child;
     attachStdioHandlers(child);
     startedAt = Date.now();
+
+    // Enter cgroup after fork — non-fatal if it fails
+    if (options.cgroupManager && child.pid !== undefined) {
+      try {
+        await options.cgroupManager.setup(pluginId, options.cgroupLimits ?? {});
+        await options.cgroupManager.enterCgroup(pluginId, child.pid);
+        cgroupEnforced = true;
+        cgroupError = undefined;
+        log.info({ pid: child.pid }, "plugin worker placed in cgroup");
+      } catch (err) {
+        cgroupEnforced = false;
+        cgroupError = err instanceof Error ? err.message : String(err);
+        log.error({ err: cgroupError }, "cgroup entry failed — plugin runs unconstrained");
+      }
+    }
 
     // Send the initialize RPC call
     const initParams: InitializeParams = {
@@ -1164,6 +1202,8 @@ export function createPluginWorkerHandle(
         pendingRequests: pendingRequests.size,
         lastCrashAt,
         nextRestartAt,
+        cgroupEnforced,
+        cgroupError,
       };
     },
   };
