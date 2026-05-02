@@ -1,16 +1,14 @@
-import { beforeAll, afterAll, afterEach, describe, expect, it } from "vitest";
-import postgres from "postgres";
-import { drizzle } from "drizzle-orm/postgres-js";
-import * as schema from "@paperclipai/db/schema";
-import { applyPendingMigrations } from "@paperclipai/db/client";
+import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import {
+  createDb,
+  applyPendingMigrations,
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
-} from "@paperclipai/db/test-embedded-postgres";
+} from "@paperclipai/db";
+import { companies, plugins, issues } from "@paperclipai/db";
 import { issueCustomFieldService } from "./issue-custom-fields.js";
 
-let sqlClient: ReturnType<typeof postgres>;
-let db: ReturnType<typeof drizzle<typeof schema>>;
+let db: ReturnType<typeof createDb>;
 let cleanup: () => Promise<void>;
 let embeddedPostgresSupported = false;
 
@@ -22,12 +20,11 @@ beforeAll(async () => {
   const testDb = await startEmbeddedPostgresTestDatabase("paperclip-icf-svc-");
   cleanup = testDb.cleanup;
   await applyPendingMigrations(testDb.connectionString);
-  sqlClient = postgres(testDb.connectionString, { max: 5, onnotice: () => {} });
-  db = drizzle(sqlClient, { schema });
+  db = createDb(testDb.connectionString);
 });
 
 afterAll(async () => {
-  await sqlClient?.end();
+  await (db?.$client as any)?.end?.();
   await cleanup?.();
 });
 
@@ -35,15 +32,16 @@ type TestParents = { companyId: string; issueId: string; pluginId: string };
 
 async function insertParents(): Promise<TestParents> {
   if (!embeddedPostgresSupported) throw new Error("embedded postgres not supported");
-  const [company] = await db.insert(schema.companies).values({ name: "test-co" }).returning({ id: schema.companies.id });
-  const [plugin] = await db.insert(schema.plugins).values({
+  const prefix = Math.random().toString(36).slice(2, 5).toUpperCase();
+  const [company] = await db.insert(companies).values({ name: "test-co", issuePrefix: prefix }).returning({ id: companies.id });
+  const [plugin] = await db.insert(plugins).values({
     pluginKey: `test.plugin.${Math.random().toString(36).slice(2)}`,
     packageName: "test-plugin",
     version: "1.0.0",
     apiVersion: 1,
-    manifestJson: { customFields: [{ key: "workstream", label: "Workstream", type: "text", scope: "issue" }] } as unknown as schema.plugins["$inferInsert"]["manifestJson"],
-  }).returning({ id: schema.plugins.id });
-  const [issue] = await db.insert(schema.issues).values({
+    manifestJson: { customFields: [{ key: "workstream", label: "Workstream", type: "text", scope: "issue" }] } as unknown as typeof plugins.$inferInsert["manifestJson"],
+  }).returning({ id: plugins.id });
+  const [issue] = await db.insert(issues).values({
     companyId: company.id,
     title: "Test issue",
     status: "backlog",
@@ -51,7 +49,7 @@ async function insertParents(): Promise<TestParents> {
     originKind: "manual",
     requestDepth: 0,
     originFingerprint: "default",
-  }).returning({ id: schema.issues.id });
+  }).returning({ id: issues.id });
   return { companyId: company.id, issueId: issue.id, pluginId: plugin.id };
 }
 
