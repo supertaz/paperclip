@@ -31,13 +31,7 @@ Credits: initial implementation approach from @insanepoet (PR #2776).
 - Tier 3 (e2e): 11 tests total — 7 supertest RBAC route tests (instance admin, `local_implicit`, non-admin, plugin actor, agent actor; response shape; empty array) in `plugin-secrets-route.test.ts`; 4 Playwright UI tests (panel heading, empty state, board-user-secret isolation, capability description) in `tests/e2e/plugin-secrets-panel.spec.ts`
 - Tier 4 (RBAC matrix): Covered by the 5-actor supertest suite — each actor type asserted allow/deny at the route boundary
 
-**Coverage:** All branches and functions **introduced by this PR** are 100% covered via `@vitest/coverage-v8`:
-- `plugin-secrets-handler.ts` new code (`write`, `delete`): 51/51 branches (100%), both functions fully hit (39 and 28 invocations). Pre-existing functions (`resolve`, `secretNotFound`, `secretVersionNotFound`, `invalidSecretRef`, `extractSecretRefsFromConfig`) predate this PR and are covered by separate pre-existing tests.
-- `instance-settings.ts`: 9/9 branches, 2/2 new functions.
-- `plugin-capability-validator.ts`, `plugin-host-services.ts`: 100% on new additions.
-- `secrets.ts` `listPluginOwned`: fully covered by 4 Tier 2 integration tests; the single V8-reported uncovered branch is a module-level ESM instrumentation artifact (the structurally unreachable "module not evaluated" path).
-
-Aggregate server-package branch percentage is lower due to pre-existing test debt in unrelated files. Full per-file breakdown in `pr-2776-audit/coverage-uncovered-branches.txt`.
+**Coverage:** 100% branches / 100% functions / 100% lines / 100% statements on **all code introduced by this PR** (per-file: `plugin-secrets-handler.ts` write+delete 51/51 branches, `instance-settings.ts` 9/9, `plugin-capability-validator.ts` 1/1, `plugin-host-services.ts` 1/1, `secrets.ts` `listPluginOwned` covered by 4 Tier 2 integration tests). Aggregate server-package branch coverage of 94.4% reflects 141 pre-existing branches in files untouched by this PR, plus 2 V8 ESM module-evaluation artifacts at line 1 of `instance-settings.ts` and `secrets.ts` (structurally unreachable "module not evaluated" paths). Full breakdown in `pr-2776-audit/coverage-uncovered-branches.txt`.
 
 **Pre-submission review:** Pre-Greptile self-review attempted twice via `codex exec --model gpt-5.4-mini -c model_reasoning_effort=xhigh`; both runs timed out during codebase exploration with no findings emitted. Substitute review performed manually (sonnet) on the integrated diff; no MUST-FIX findings in new code; two pre-existing out-of-scope issues documented in Known follow-ups below.
 
