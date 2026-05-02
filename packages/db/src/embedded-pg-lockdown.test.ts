@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach, afterAll } from "vitest";
+import { describe, expect, it, vi, afterEach, afterAll, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,6 +92,42 @@ describe("assertPgNotReachableOnInterfaces", () => {
     await expect(
       assertPgNotReachableOnInterfaces(["192.168.1.10"], 5432),
     ).rejects.toThrow(/ENETUNREACH/);
+  });
+
+  it("throws with error message when socket error has no code (fail closed on ambiguous)", async () => {
+    vi.spyOn(net, "createConnection").mockImplementation((_port: unknown, _host: unknown, callback?: () => void) => {
+      const socket = {
+        on: vi.fn().mockImplementation((event: string, handler: (err?: Error) => void) => {
+          if (event === "error") {
+            setTimeout(() => handler(new Error("some unknown error")), 0);
+          }
+          return socket;
+        }),
+        destroy: vi.fn(),
+      };
+      callback?.();
+      return socket as unknown as net.Socket;
+    });
+
+    await expect(
+      assertPgNotReachableOnInterfaces(["192.168.1.10"], 5432),
+    ).rejects.toThrow(/some unknown error/);
+  });
+
+  it("throws when internal 500ms timeout fires (socket hangs, neither connects nor errors)", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(net, "createConnection").mockImplementation(() => {
+      const socket = {
+        on: vi.fn().mockReturnThis(),
+        destroy: vi.fn(),
+      };
+      return socket as unknown as net.Socket;
+    });
+
+    const probe = assertPgNotReachableOnInterfaces(["192.168.1.10"], 5432);
+    vi.advanceTimersByTime(501);
+    await expect(probe).rejects.toThrow(/timed out/);
+    vi.useRealTimers();
   });
 
   it("resolves immediately for empty address list (no probe needed)", async () => {

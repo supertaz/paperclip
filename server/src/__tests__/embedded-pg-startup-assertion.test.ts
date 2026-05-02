@@ -360,3 +360,94 @@ describe("startServer embedded-pg lockdown: startup assertion", () => {
     expect(instance?.stop).toHaveBeenCalled();
   });
 });
+
+describe("startServer embedded-pg: startup path coverage", () => {
+  // These tests cover the remaining branches in the embedded-pg startup block:
+  // no-pid-file reuse, initialise() path, stale-pid-file removal, start() failure.
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createBetterAuthInstanceMock.mockReturnValue({});
+    deriveAuthTrustedOriginsMock.mockReturnValue([]);
+    process.env.BETTER_AUTH_SECRET = "test-secret";
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", cidr: null, mac: "00:00:00:00:00:00" }],
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reuses existing pg when getPostgresDataDirectory returns matching dataDir (no-pid-file reuse path)", async () => {
+    loadConfigMock.mockReturnValue(buildEmbeddedTestConfig());
+    const { existsSync } = await import("node:fs");
+    // PG_VERSION exists, postmaster.pid absent → no runningPid → tries getPostgresDataDirectory
+    // Return matching dataDir so the reuse path succeeds
+    vi.mocked(existsSync).mockImplementation((path: unknown) => {
+      const p = String(path);
+      if (p.endsWith("PG_VERSION")) return true;
+      if (p.endsWith("postmaster.pid")) return false;
+      return true;
+    });
+    const { getPostgresDataDirectory } = await import("@paperclipai/db");
+    vi.mocked(getPostgresDataDirectory).mockResolvedValueOnce("/tmp/paperclip-test-pg-data");
+
+    await startServer();
+
+    // Constructor NOT called — reuse path, not new start
+    expect(embeddedPostgresMock).not.toHaveBeenCalled();
+  });
+
+  it("calls initialise() when cluster not yet initialized (PG_VERSION absent)", async () => {
+    loadConfigMock.mockReturnValue(buildEmbeddedTestConfig());
+    const { existsSync } = await import("node:fs");
+    vi.mocked(existsSync).mockImplementation((path: unknown) => {
+      const p = String(path);
+      if (p.endsWith("PG_VERSION")) return false; // cluster not initialized
+      if (p.endsWith("postmaster.pid")) return false;
+      return true;
+    });
+    const { getPostgresDataDirectory } = await import("@paperclipai/db");
+    vi.mocked(getPostgresDataDirectory).mockRejectedValue(new Error("pg not reachable"));
+
+    await startServer();
+
+    const instance = embeddedPostgresMock.mock.results[0]?.value;
+    expect(instance?.initialise).toHaveBeenCalled();
+  });
+
+  it("removes stale postmaster.pid before start() when it exists", async () => {
+    loadConfigMock.mockReturnValue(buildEmbeddedTestConfig());
+    const { existsSync, rmSync } = await import("node:fs");
+    vi.mocked(existsSync).mockImplementation((path: unknown) => {
+      const p = String(path);
+      if (p.endsWith("PG_VERSION")) return true;
+      if (p.endsWith("postmaster.pid")) return true; // stale pid file present
+      return true;
+    });
+    const { getPostgresDataDirectory } = await import("@paperclipai/db");
+    vi.mocked(getPostgresDataDirectory).mockRejectedValue(new Error("pg not reachable"));
+
+    await startServer();
+
+    expect(vi.mocked(rmSync)).toHaveBeenCalledWith(expect.stringContaining("postmaster.pid"), { force: true });
+  });
+
+  it("throws when embeddedPostgres.start() fails (propagates start error)", async () => {
+    loadConfigMock.mockReturnValue(buildEmbeddedTestConfig());
+    const { getPostgresDataDirectory } = await import("@paperclipai/db");
+    vi.mocked(getPostgresDataDirectory).mockRejectedValue(new Error("pg not reachable"));
+    // Make start() fail after construction
+    const { default: EmbeddedPostgres } = await import("embedded-postgres");
+    const instance = (vi.mocked(EmbeddedPostgres) as typeof embeddedPostgresMock).mock.results[0]?.value;
+    // Re-configure start to fail for this test (needs a fresh call)
+    embeddedPostgresMock.mockImplementationOnce(() => ({
+      initialise: vi.fn(async () => {}),
+      start: vi.fn(async () => { throw new Error("Failed to start embedded PostgreSQL on port 54329"); }),
+      stop: vi.fn(async () => {}),
+    }));
+
+    await expect(startServer()).rejects.toThrow(/Failed to start embedded PostgreSQL/);
+  });
+});
