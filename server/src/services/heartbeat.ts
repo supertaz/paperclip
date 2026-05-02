@@ -32,6 +32,8 @@ import {
   issueRelations,
   issues,
   issueWorkProducts,
+  plugins,
+  pluginCompanySettings,
   projects,
   projectWorkspaces,
   workspaceOperations,
@@ -136,6 +138,7 @@ import { environmentService } from "./environments.js";
 import { environmentRuntimeService } from "./environment-runtime.js";
 import { environmentRunOrchestrator } from "./environment-run-orchestrator.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
+import { broadcastBeforeRun } from "./plugin-worker-manager.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -1752,6 +1755,31 @@ export function mergeCoalescedContextSnapshot(
     delete merged[PAPERCLIP_WAKE_PAYLOAD_KEY];
   }
   return merged;
+}
+
+/**
+ * A flattened row representing a plugin with `run.gate` capability, with the
+ * per-company disabled flag joined in. Used by resolveRunGatePlugins and
+ * claimQueuedRun.
+ */
+export interface RunGatePluginRow {
+  id: string;
+  pluginKey: string;
+  installOrder: number | null;
+  capabilities: string[];
+  disabledForCompany: boolean;
+}
+
+/**
+ * Filter and sort a list of plugins to produce an ordered gate list.
+ *
+ * - Filters to plugins that declare `run.gate` and are not disabled for the company.
+ * - Sorts by installOrder ascending (null treated as Infinity).
+ */
+export function resolveRunGatePlugins(rows: RunGatePluginRow[]): RunGatePluginRow[] {
+  return rows
+    .filter((p) => p.capabilities.includes("run.gate") && !p.disabledForCompany)
+    .sort((a, b) => (a.installOrder ?? Infinity) - (b.installOrder ?? Infinity));
 }
 
 async function buildPaperclipWakePayload(input: {
@@ -4039,6 +4067,68 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
     }
 
+    if (options.pluginWorkerManager) {
+      const mgr = options.pluginWorkerManager;
+      const gateRows = await db
+        .select({
+          id: plugins.id,
+          pluginKey: plugins.pluginKey,
+          installOrder: plugins.installOrder,
+          capabilities: plugins.manifestJson,
+          disabledForCompany: sql<boolean>`
+            COALESCE(
+              (SELECT enabled = false FROM plugin_company_settings
+               WHERE plugin_id = ${plugins.id} AND company_id = ${run.companyId}
+               LIMIT 1),
+              false
+            )
+          `,
+        })
+        .from(plugins)
+        .where(eq(plugins.status, "ready"));
+
+      const gatePluginRows: RunGatePluginRow[] = gateRows.map((row) => ({
+        id: row.id,
+        pluginKey: row.pluginKey,
+        installOrder: row.installOrder,
+        capabilities: Array.isArray((row.capabilities as { capabilities?: unknown[] })?.capabilities)
+          ? ((row.capabilities as { capabilities: string[] }).capabilities)
+          : [],
+        disabledForCompany: Boolean(row.disabledForCompany),
+      }));
+
+      const orderedGates = resolveRunGatePlugins(gatePluginRows);
+      if (orderedGates.length > 0) {
+        const gateCallables = orderedGates
+          .filter((p) => mgr.isRunning(p.id))
+          .map((p) => ({
+            pluginId: p.id,
+            callBeforeRun: (params: import("./plugin-worker-manager.js").BeforeRunParams) =>
+              mgr.call(p.id, "beforeRun", params),
+          }));
+
+        const context = parseObject(run.contextSnapshot);
+        const issueId = readNonEmptyString(context.issueId);
+        const gateResult = await broadcastBeforeRun(gateCallables, {
+          runId: run.id,
+          agentId: run.agentId,
+          issueId: issueId ?? null,
+          companyId: run.companyId,
+          invocationSource: run.invocationSource,
+        });
+
+        if (gateResult.veto) {
+          const firstVeto = orderedGates.find((p) => mgr.isRunning(p.id));
+          await cancelQueuedRunForPluginGate(run, gateResult.reason, firstVeto?.id ?? "unknown");
+          logger.info(
+            { runId: run.id, reason: gateResult.reason },
+            "claimQueuedRun: cancelled by plugin gate",
+          );
+          return null;
+        }
+      }
+    }
+
     const claimedAt = new Date();
     const claimed = await db
       .update(heartbeatRuns)
@@ -4152,6 +4242,59 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         issueId,
         unresolvedBlockerIssueIds,
       },
+    });
+
+    return cancelled;
+  }
+
+  async function cancelQueuedRunForPluginGate(
+    run: typeof heartbeatRuns.$inferSelect,
+    vetoReason: string,
+    vetoPluginId: string,
+  ) {
+    const now = new Date();
+    const cancelled = await setRunStatus(run.id, "cancelled", {
+      finishedAt: now,
+      error: vetoReason,
+      errorCode: "plugin_gate",
+      resultJson: {
+        ...parseObject(run.resultJson),
+        stopReason: "plugin_gate",
+        effectiveTimeoutSec: 0,
+        timeoutConfigured: false,
+        timeoutSource: "plugin_gate",
+        timeoutFired: false,
+      },
+    });
+    if (!cancelled) return null;
+
+    await setWakeupStatus(run.wakeupRequestId, "skipped", {
+      finishedAt: now,
+      error: vetoReason,
+    });
+
+    publishLiveEvent({
+      companyId: cancelled.companyId,
+      type: "heartbeat.run.status",
+      payload: {
+        runId: cancelled.id,
+        agentId: cancelled.agentId,
+        status: cancelled.status,
+        invocationSource: cancelled.invocationSource,
+        triggerDetail: cancelled.triggerDetail,
+        error: cancelled.error ?? null,
+        errorCode: cancelled.errorCode ?? null,
+        startedAt: cancelled.startedAt ? new Date(cancelled.startedAt).toISOString() : null,
+        finishedAt: cancelled.finishedAt ? new Date(cancelled.finishedAt).toISOString() : null,
+      },
+    });
+
+    await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
+      eventType: "lifecycle",
+      stream: "system",
+      level: "warn",
+      message: `Run cancelled by plugin gate: ${vetoReason}`,
+      payload: { vetoPluginId, vetoReason },
     });
 
     return cancelled;
