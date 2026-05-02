@@ -199,4 +199,93 @@ describe("issueCustomFieldService", () => {
       svc.set({ companyId, issueId, pluginId, key: "score", value: "1<script>", fieldType: "number", fieldLabel: "Score" })
     ).rejects.toThrow(/invalid.*number/i);
   });
+
+  it("set accepts enum-ref type and stores value as text", async () => {
+    if (!embeddedPostgresSupported) return;
+    const { companyId, issueId, pluginId } = await insertParents();
+    const svc = issueCustomFieldService(db);
+
+    await svc.set({ companyId, issueId, pluginId, key: "status", value: "open", fieldType: "enum-ref", fieldLabel: "Status" });
+    const fields = await svc.listForIssue({ companyId, issueId, pluginId });
+
+    expect(fields).toHaveLength(1);
+    expect(fields[0].type).toBe("enum-ref");
+    expect(fields[0].valueText).toBe("open");
+    expect(fields[0].valueNumber).toBeNull();
+  });
+
+  it("rejects url type with unparseable string", async () => {
+    if (!embeddedPostgresSupported) return;
+    const { companyId, issueId, pluginId } = await insertParents();
+    const svc = issueCustomFieldService(db);
+
+    await expect(
+      svc.set({ companyId, issueId, pluginId, key: "docs", value: "not a url at all", fieldType: "url", fieldLabel: "Docs" })
+    ).rejects.toThrow(/invalid.*url/i);
+  });
+
+  it("set accepts valid https url and stores value", async () => {
+    if (!embeddedPostgresSupported) return;
+    const { companyId, issueId, pluginId } = await insertParents();
+    const svc = issueCustomFieldService(db);
+
+    await svc.set({ companyId, issueId, pluginId, key: "docs", value: "https://example.com/path", fieldType: "url", fieldLabel: "Docs" });
+    const fields = await svc.listForIssue({ companyId, issueId, pluginId });
+
+    expect(fields).toHaveLength(1);
+    expect(fields[0].valueText).toBe("https://example.com/path");
+  });
+
+  it("listForIssuesBatch returns empty map for empty issueIds", async () => {
+    if (!embeddedPostgresSupported) return;
+    const { companyId, pluginId } = await insertParents();
+    const svc = issueCustomFieldService(db);
+
+    const result = await svc.listForIssuesBatch({ companyId, issueIds: [], pluginId });
+    expect(result.size).toBe(0);
+  });
+
+  it("listForIssuesBatch returns fields grouped by issueId", async () => {
+    if (!embeddedPostgresSupported) return;
+    const { companyId, issueId: issueId1, pluginId } = await insertParents();
+    // Insert a second issue in the same company
+    const [issue2] = await db.insert(issues).values({
+      companyId,
+      title: "Second issue",
+      status: "backlog",
+      priority: "medium",
+      originKind: "manual",
+      requestDepth: 0,
+      originFingerprint: "default2",
+    }).returning({ id: issues.id });
+    const issueId2 = issue2.id;
+
+    const svc = issueCustomFieldService(db);
+    await svc.set({ companyId, issueId: issueId1, pluginId, key: "score", value: "10", fieldType: "number", fieldLabel: "Score" });
+    await svc.set({ companyId, issueId: issueId2, pluginId, key: "score", value: "20", fieldType: "number", fieldLabel: "Score" });
+
+    const result = await svc.listForIssuesBatch({ companyId, issueIds: [issueId1, issueId2], pluginId });
+    expect(result.size).toBe(2);
+    expect(result.get(issueId1)?.[0]?.valueText).toBe("10");
+    expect(result.get(issueId2)?.[0]?.valueText).toBe("20");
+  });
+
+  it("unset returns false for non-existent key (no-op detection)", async () => {
+    if (!embeddedPostgresSupported) return;
+    const { companyId, issueId, pluginId } = await insertParents();
+    const svc = issueCustomFieldService(db);
+
+    const result = await svc.unset({ companyId, issueId, pluginId, key: "nonexistent" });
+    expect(result).toBe(false);
+  });
+
+  it("unset returns true when a live row was deleted", async () => {
+    if (!embeddedPostgresSupported) return;
+    const { companyId, issueId, pluginId } = await insertParents();
+    const svc = issueCustomFieldService(db);
+
+    await svc.set({ companyId, issueId, pluginId, key: "tag", value: "active", fieldType: "text", fieldLabel: "Tag" });
+    const result = await svc.unset({ companyId, issueId, pluginId, key: "tag" });
+    expect(result).toBe(true);
+  });
 });
