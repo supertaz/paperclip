@@ -35,7 +35,9 @@ export const instanceGeneralSettingsSchema = z.object({
 
 export const patchInstanceGeneralSettingsSchema = instanceGeneralSettingsSchema.partial();
 
-const PLUGIN_ID_REGEX = /^[a-z][a-z0-9._-]*$/;
+// At least 2 chars (letter + one more) to avoid single-char IDs that collide
+// with cgroup interface name prefixes (cpu, pids, memory, etc.).
+const PLUGIN_ID_REGEX = /^[a-z][a-z0-9._-]+$/;
 const MIN_MEMORY_HIGH_BYTES = 33554432;   // 32MB
 const MIN_MEMORY_MAX_BYTES = 67108864;    // 64MB
 const MIN_CPU_WEIGHT = 1;

@@ -46,12 +46,21 @@ export function createPluginCgroupManager(
 ): PluginCgroupManager {
   const { cgroupRoot } = options;
 
+  // Cache the support check — cgroupsv2 availability can't change without a restart.
+  let supportedCache: boolean | undefined;
+
   async function isSupported(): Promise<boolean> {
-    if (platform() !== "linux") return false;
+    if (supportedCache !== undefined) return supportedCache;
+    if (platform() !== "linux") {
+      supportedCache = false;
+      return false;
+    }
     try {
       await readFile(path.join(cgroupRoot, "cgroup.controllers"), "utf8");
+      supportedCache = true;
       return true;
     } catch {
+      supportedCache = false;
       return false;
     }
   }
@@ -88,7 +97,20 @@ export function createPluginCgroupManager(
     }
   }
 
+  function validateLimits(limits: PluginCgroupLimits): void {
+    if (
+      limits.memoryHighBytes !== undefined &&
+      limits.memoryMaxBytes !== undefined &&
+      limits.memoryMaxBytes < limits.memoryHighBytes
+    ) {
+      throw new Error(
+        `Invalid cgroup limits: memoryMaxBytes (${limits.memoryMaxBytes}) must be >= memoryHighBytes (${limits.memoryHighBytes})`,
+      );
+    }
+  }
+
   async function writeLimits(cgroupDir: string, limits: PluginCgroupLimits): Promise<void> {
+    validateLimits(limits);
     if (limits.pidsMax !== undefined) {
       await writeFile(path.join(cgroupDir, "pids.max"), String(limits.pidsMax), "utf8");
     }

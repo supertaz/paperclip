@@ -101,6 +101,15 @@ describe("instanceExperimentalSettingsSchema — cgroup fields", () => {
     ).toThrow();
   });
 
+  it("rejects single-char plugin id override key (must be ≥2 chars)", () => {
+    expect(() =>
+      instanceExperimentalSettingsSchema.parse({
+        ...base,
+        pluginCgroupOverrides: { "a": { pidsMax: 64 } },
+      }),
+    ).toThrow();
+  });
+
   it("rejects override with invalid limit value", () => {
     expect(() =>
       instanceExperimentalSettingsSchema.parse({
