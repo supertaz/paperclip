@@ -104,3 +104,124 @@ describe("instance settings routes — cgroup active flag", () => {
     expect(res.body.pluginCgroupActive).toBe(false);
   });
 });
+
+describe("instance settings routes — cgroup PATCH (Tier 3 E2E)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../services/index.js");
+    vi.doUnmock("../routes/instance-settings.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    mockInstanceSettingsService.listCompanyIds.mockResolvedValue([]);
+    mockInstanceSettingsService.updateExperimental.mockResolvedValue({
+      id: "inst-1",
+      experimental: {
+        enableEnvironments: false,
+        enableIsolatedWorkspaces: false,
+        autoRestartDevServerWhenIdle: false,
+        enableIssueGraphLivenessAutoRecovery: false,
+        issueGraphLivenessAutoRecoveryLookbackHours: 24,
+        pluginCgroupDefaults: { pidsMax: 64 },
+        pluginCgroupOverrides: {},
+      },
+    });
+    mockLogActivity.mockResolvedValue(undefined);
+  });
+
+  it("PATCH with pluginCgroupDefaults calls updateExperimental with correct payload", async () => {
+    const app = await createApp(boardActor);
+    const res = await request(app)
+      .patch("/api/instance/settings/experimental")
+      .send({ pluginCgroupDefaults: { pidsMax: 64 } });
+    expect(res.status).toBe(200);
+    expect(mockInstanceSettingsService.updateExperimental).toHaveBeenCalledWith({
+      pluginCgroupDefaults: { pidsMax: 64 },
+    });
+  });
+
+  it("PATCH rejects invalid pluginCgroupDefaults (pidsMax below minimum)", async () => {
+    const app = await createApp(boardActor);
+    const res = await request(app)
+      .patch("/api/instance/settings/experimental")
+      .send({ pluginCgroupDefaults: { pidsMax: 1 } });
+    expect(res.status).toBe(400);
+    expect(mockInstanceSettingsService.updateExperimental).not.toHaveBeenCalled();
+  });
+
+  it("PATCH rejects invalid pluginCgroupDefaults (memoryMaxBytes < memoryHighBytes)", async () => {
+    const app = await createApp(boardActor);
+    const res = await request(app)
+      .patch("/api/instance/settings/experimental")
+      .send({
+        pluginCgroupDefaults: {
+          memoryHighBytes: 134217728,
+          memoryMaxBytes: 67108864,
+        },
+      });
+    expect(res.status).toBe(400);
+    expect(mockInstanceSettingsService.updateExperimental).not.toHaveBeenCalled();
+  });
+});
+
+describe("instance settings routes — cgroup RBAC (Tier 4)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../services/index.js");
+    vi.doUnmock("../routes/instance-settings.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    mockInstanceSettingsService.getExperimental.mockResolvedValue({
+      enableEnvironments: false,
+      enableIsolatedWorkspaces: false,
+      autoRestartDevServerWhenIdle: false,
+      enableIssueGraphLivenessAutoRecovery: false,
+      issueGraphLivenessAutoRecoveryLookbackHours: 24,
+      pluginCgroupDefaults: {},
+      pluginCgroupOverrides: {},
+    });
+    mockInstanceSettingsService.listCompanyIds.mockResolvedValue([]);
+    mockLogActivity.mockResolvedValue(undefined);
+  });
+
+  it("GET experimental settings allowed for org member (board, non-admin)", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+    });
+    const res = await request(app).get("/api/instance/settings/experimental");
+    expect(res.status).toBe(200);
+    expect(res.body.pluginCgroupActive).toBe(false);
+  });
+
+  it("GET experimental settings denied for agent actor", async () => {
+    const app = await createApp({ type: "agent", agentId: "agent-1" });
+    const res = await request(app).get("/api/instance/settings/experimental");
+    expect(res.status).toBe(403);
+  });
+
+  it("PATCH experimental settings denied for non-instance-admin board member", async () => {
+    mockInstanceSettingsService.updateExperimental.mockResolvedValue({
+      id: "inst-1",
+      experimental: {},
+    });
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+    });
+    const res = await request(app)
+      .patch("/api/instance/settings/experimental")
+      .send({ pluginCgroupDefaults: { pidsMax: 64 } });
+    expect(res.status).toBe(403);
+    expect(mockInstanceSettingsService.updateExperimental).not.toHaveBeenCalled();
+  });
+});
