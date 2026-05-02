@@ -4,6 +4,7 @@ import {
   plugins,
   pluginConfig,
   pluginEntities,
+  pluginCompanySettings,
   pluginJobs,
   pluginJobRuns,
   pluginWebhookDeliveries,
@@ -26,6 +27,7 @@ import type {
   PluginWebhookDeliveryStatus,
 } from "@paperclipai/shared";
 import { conflict, notFound } from "../errors.js";
+import { checkPeerEntityAccess, PEER_ENTITY_MAX_LIMIT } from "./plugin-peer-reads.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -495,6 +497,139 @@ export function pluginRegistryService(db: Db) {
         .where(eq(pluginEntities.id, id))
         .returning();
       return rows[0] ?? null;
+    },
+
+    // ----- Peer entity reads (WF-3) ---------------------------------------
+
+    /**
+     * List entity rows owned by a provider plugin, accessible by a consumer plugin.
+     *
+     * Access control: consumer must be authorized in the provider's peerReads.allow
+     * manifest declaration. Provider must be enabled for the given company.
+     * All failures throw PluginPeerReadDenied — callers cannot distinguish
+     * "not found" from "not authorized" to prevent information leakage.
+     *
+     * @param consumerPluginId - UUID of the calling (consumer) plugin.
+     * @param params - Query including companyId, providerPluginKey, entityType, and optional filters.
+     */
+    peerEntitiesList: async (
+      consumerPluginId: string,
+      params: {
+        companyId: string;
+        providerPluginKey: string;
+        entityType: string;
+        scopeKind?: string;
+        scopeId?: string;
+        externalId?: string;
+        limit?: number;
+        offset?: number;
+      },
+    ): Promise<PluginEntityRecord[]> => {
+      const consumer = await getById(consumerPluginId);
+      const provider = await getByKey(params.providerPluginKey);
+      if (!consumer || !provider) {
+        throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
+      }
+
+      // Verify provider is enabled for this company
+      const providerEnabled = await db
+        .select({ enabled: pluginCompanySettings.enabled })
+        .from(pluginCompanySettings)
+        .where(
+          and(
+            eq(pluginCompanySettings.pluginId, provider.id),
+            eq(pluginCompanySettings.companyId, params.companyId),
+          ),
+        )
+        .then((rows) => rows[0]?.enabled ?? false);
+      if (!providerEnabled) {
+        throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
+      }
+
+      const access = checkPeerEntityAccess(
+        consumer.pluginKey,
+        provider.manifestJson as PaperclipPluginManifestV1,
+        params.entityType,
+      );
+      if (!access.allowed) {
+        throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
+      }
+
+      const effectiveLimit = Math.min(params.limit ?? PEER_ENTITY_MAX_LIMIT, PEER_ENTITY_MAX_LIMIT);
+      const conditions = [
+        eq(pluginEntities.pluginId, provider.id),
+        eq(pluginEntities.entityType, params.entityType),
+      ];
+      if (params.scopeKind) conditions.push(eq(pluginEntities.scopeKind, params.scopeKind as any));
+      if (params.scopeId) conditions.push(eq(pluginEntities.scopeId, params.scopeId));
+      if (params.externalId) conditions.push(eq(pluginEntities.externalId, params.externalId));
+
+      return db
+        .select()
+        .from(pluginEntities)
+        .where(and(...conditions))
+        .orderBy(asc(pluginEntities.createdAt))
+        .limit(effectiveLimit)
+        .offset(params.offset ?? 0) as unknown as Promise<PluginEntityRecord[]>;
+    },
+
+    /**
+     * Get a single entity row owned by a provider plugin, accessible by a consumer plugin.
+     *
+     * Returns null if the entity is not found OR access is denied — callers cannot
+     * distinguish between the two cases (no information leakage).
+     *
+     * @param consumerPluginId - UUID of the calling (consumer) plugin.
+     * @param params - Lookup parameters including companyId, providerPluginKey, entityType, externalId, scopeKind.
+     */
+    peerEntityGet: async (
+      consumerPluginId: string,
+      params: {
+        companyId: string;
+        providerPluginKey: string;
+        entityType: string;
+        externalId: string;
+        scopeKind: string;
+        scopeId?: string;
+      },
+    ): Promise<PluginEntityRecord | null> => {
+      const consumer = await getById(consumerPluginId);
+      const provider = await getByKey(params.providerPluginKey);
+      if (!consumer || !provider) return null;
+
+      // Verify provider is enabled for this company
+      const providerEnabled = await db
+        .select({ enabled: pluginCompanySettings.enabled })
+        .from(pluginCompanySettings)
+        .where(
+          and(
+            eq(pluginCompanySettings.pluginId, provider.id),
+            eq(pluginCompanySettings.companyId, params.companyId),
+          ),
+        )
+        .then((rows) => rows[0]?.enabled ?? false);
+      if (!providerEnabled) return null;
+
+      const access = checkPeerEntityAccess(
+        consumer.pluginKey,
+        provider.manifestJson as PaperclipPluginManifestV1,
+        params.entityType,
+      );
+      if (!access.allowed) return null;
+
+      const conditions = [
+        eq(pluginEntities.pluginId, provider.id),
+        eq(pluginEntities.entityType, params.entityType),
+        eq(pluginEntities.externalId, params.externalId),
+        eq(pluginEntities.scopeKind, params.scopeKind as any),
+      ];
+      if (params.scopeId) conditions.push(eq(pluginEntities.scopeId, params.scopeId));
+
+      return db
+        .select()
+        .from(pluginEntities)
+        .where(and(...conditions))
+        .then((rows) => (rows[0] as unknown as PluginEntityRecord) ?? null);
     },
 
     // ----- Jobs -----------------------------------------------------------
