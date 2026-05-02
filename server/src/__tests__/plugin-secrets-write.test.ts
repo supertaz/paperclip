@@ -432,6 +432,93 @@ describe("delete() adversarial fixes", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Rate limiting — write path
+// ---------------------------------------------------------------------------
+
+describe("createPluginSecretsHandler.write() rate limiting", () => {
+  it("throws RateLimitExceededError after 20 write ops in the same window", async () => {
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
+    mockCreate.mockResolvedValue(BASE_SECRET);
+    const h = createPluginSecretsHandler({ db: makeFakeDb(), pluginId: PLUGIN_ID });
+    // exhaust 20-op sliding window
+    for (let i = 0; i < 20; i++) {
+      mockGetByName.mockResolvedValue(null);
+      await h.write({ companyId: COMPANY_ID, name: `SECRET_${i}`, value: "val" });
+    }
+    mockGetByName.mockResolvedValue(null);
+    await expect(
+      h.write({ companyId: COMPANY_ID, name: "OVERFLOW_SECRET", value: "val" }),
+    ).rejects.toThrow(/rate limit/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rate limiting — delete path
+// ---------------------------------------------------------------------------
+
+describe("createPluginSecretsHandler.delete() rate limiting", () => {
+  it("throws RateLimitExceededError after 20 delete ops in the same window", async () => {
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
+    const h = createPluginSecretsHandler({ db: makeFakeDb(), pluginId: PLUGIN_ID });
+    // exhaust 20-op sliding window (deletes of non-existent secrets still count)
+    for (let i = 0; i < 20; i++) {
+      mockGetByName.mockResolvedValue(null);
+      await h.delete({ companyId: COMPANY_ID, name: `SECRET_${i}` });
+    }
+    mockGetByName.mockResolvedValue(null);
+    await expect(
+      h.delete({ companyId: COMPANY_ID, name: "OVERFLOW_SECRET" }),
+    ).rejects.toThrow(/rate limit/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// delete() — name validation
+// ---------------------------------------------------------------------------
+
+describe("createPluginSecretsHandler.delete() name validation", () => {
+  let h: PluginSecretsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
+    h = createPluginSecretsHandler({ db: makeFakeDb(), pluginId: PLUGIN_ID });
+  });
+
+  it("rejects name longer than 255 chars", async () => {
+    await expect(
+      h.delete({ companyId: COMPANY_ID, name: "A".repeat(256) }),
+    ).rejects.toThrow(/255/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// write() — alternate provider via env
+// ---------------------------------------------------------------------------
+
+describe("createPluginSecretsHandler.write() provider selection", () => {
+  it("uses PAPERCLIP_SECRETS_PROVIDER env var when set to a valid provider", async () => {
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
+    mockGetByName.mockResolvedValue(null);
+    const capturedArgs: unknown[] = [];
+    mockCreate.mockImplementation(async (_companyId: string, input: { provider: string }, _actor: unknown) => {
+      capturedArgs.push(input.provider);
+      return BASE_SECRET;
+    });
+    const prevProvider = process.env.PAPERCLIP_SECRETS_PROVIDER;
+    process.env.PAPERCLIP_SECRETS_PROVIDER = "local_encrypted";
+    try {
+      const h = createPluginSecretsHandler({ db: makeFakeDb(), pluginId: PLUGIN_ID });
+      await h.write({ companyId: COMPANY_ID, name: "MY_SECRET", value: "val" });
+      expect(capturedArgs[0]).toBe("local_encrypted");
+    } finally {
+      if (prevProvider === undefined) delete process.env.PAPERCLIP_SECRETS_PROVIDER;
+      else process.env.PAPERCLIP_SECRETS_PROVIDER = prevProvider;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SDK types: PluginSecretsClient has write and delete
 // ---------------------------------------------------------------------------
 
