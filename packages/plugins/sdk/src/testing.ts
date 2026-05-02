@@ -1211,6 +1211,11 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         logs.push({ level: "debug", message, meta });
       },
     },
+    runs: {
+      onBeforeRun(_handler) {
+        requireCapability(manifest, capabilitySet, "run.gate");
+      },
+    },
   };
 
   const harness: TestHarness = {
