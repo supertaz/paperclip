@@ -121,33 +121,29 @@ vi.mock("embedded-postgres", () => ({
   default: embeddedPostgresMock,
 }));
 
-vi.mock("../../../packages/db/src/embedded-pg-lockdown.js", () => ({
+vi.mock("@paperclipai/db", () => ({
+  createDb: createDbMock,
+  // Throw so the code takes the "new EmbeddedPostgres constructor" path (not the reuse path)
+  ensurePostgresDatabase: vi.fn(async () => "existing"),
+  getPostgresDataDirectory: vi.fn(async () => { throw new Error("pg not reachable"); }),
+  inspectMigrations: vi.fn(async () => ({ status: "upToDate" })),
+  applyPendingMigrations: vi.fn(),
+  reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
+  formatDatabaseBackupResult: vi.fn(() => "ok"),
+  runDatabaseBackup: vi.fn(),
+  createEmbeddedPostgresLogBuffer: vi.fn(() => ({
+    append: vi.fn(),
+    getRecentLogs: vi.fn(() => []),
+  })),
+  formatEmbeddedPostgresError: vi.fn((err: unknown) => (err instanceof Error ? err : new Error(String(err)))),
+  authUsers: {},
+  companies: {},
+  companyMemberships: {},
+  heartbeatRuns: {},
+  instanceUserRoles: {},
+  buildEmbeddedPostgresFlags: () => ["-c", "listen_addresses=127.0.0.1"],
   assertPgNotReachableOnInterfaces: assertPgNotReachableOnInterfacesMock,
 }));
-
-vi.mock("@paperclipai/db", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@paperclipai/db")>();
-  return {
-    ...actual,
-    createDb: createDbMock,
-    ensurePostgresDatabase: vi.fn(async () => "existing"),
-    getPostgresDataDirectory: vi.fn(async () => "/tmp/paperclip-test-pg-data"),
-    inspectMigrations: vi.fn(async () => ({ status: "upToDate" })),
-    applyPendingMigrations: vi.fn(),
-    reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
-    formatDatabaseBackupResult: vi.fn(() => "ok"),
-    runDatabaseBackup: vi.fn(),
-    createEmbeddedPostgresLogBuffer: vi.fn(() => ({
-      append: vi.fn(),
-      getRecentLogs: vi.fn(() => []),
-    })),
-    authUsers: {},
-    companies: {},
-    companyMemberships: {},
-    instanceUserRoles: {},
-    buildEmbeddedPostgresFlags: () => ["-c", "listen_addresses=127.0.0.1"],
-  };
-});
 
 vi.mock("../app.js", () => ({
   createApp: createAppMock,
@@ -228,7 +224,7 @@ vi.mock("../services/plugin-worker-manager.js", () => ({
 
 vi.mock("../telemetry.js", () => ({
   initTelemetry: vi.fn(async () => {}),
-  getTelemetryClient: vi.fn(() => ({ flush: vi.fn(async () => {}) })),
+  getTelemetryClient: vi.fn(() => ({ flush: vi.fn(async () => {}), stop: vi.fn(async () => {}) })),
 }));
 
 vi.mock("../runtime-api.js", () => ({
