@@ -120,7 +120,7 @@ describe("InstanceGeneralSettings — container engine section", () => {
     await act(async () => { root.unmount(); });
   });
 
-  it("shows the concurrencyPerPlugin value", async () => {
+  it("shows the concurrencyPerPlugin value in the input", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -134,7 +134,9 @@ describe("InstanceGeneralSettings — container engine section", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("10");
+    const input = container.querySelector("input[name='containerEngine.concurrencyPerPlugin']") as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    expect(input?.value).toBe("10");
 
     await act(async () => { root.unmount(); });
   });
