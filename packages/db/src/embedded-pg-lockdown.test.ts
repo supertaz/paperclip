@@ -2,12 +2,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import net from "node:net";
-import os from "node:os";
 
-// --- Tier 1: unit tests for assertPgNotReachableOnInterfaces ---
-
-// We import the module under test; it doesn't exist yet (RED)
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { assertPgNotReachableOnInterfaces } from "./embedded-pg-lockdown.js";
 
 describe("assertPgNotReachableOnInterfaces", () => {
@@ -124,8 +119,6 @@ describe("assertPgNotReachableOnInterfaces", () => {
     expect(callCount).toBe(1);
   });
 });
-
-// --- Tier 4: static regression guard — all three constructor sites must pass postgresFlags ---
 
 const REPO_ROOT = resolve("/home/taz/Development/paperclip-plugins/cc-g2-pg-lockdown-impl");
 

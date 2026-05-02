@@ -1,12 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import os from "node:os";
 
-// RED test: embedded-postgres startup assertion verifying:
-// 1. postgresFlags is passed to EmbeddedPostgres constructor
-// 2. startup assertion runs and rejects if pg reachable on non-loopback
-// 3. startup assertion skipped for loopback bind
-// 4. process-leak guard: stop() called if probe throws
-
 const {
   createAppMock,
   createBetterAuthInstanceMock,

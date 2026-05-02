@@ -1,12 +1,5 @@
 import net from "node:net";
 
-/**
- * Probes each address to verify embedded PostgreSQL is NOT reachable there.
- *
- * Only ECONNREFUSED is treated as "not reachable". Any successful connection or
- * any other error (ETIMEDOUT, ENETUNREACH, etc.) causes startup to fail —
- * ambiguous results are treated as a security failure, not a pass.
- */
 export async function assertPgNotReachableOnInterfaces(
   addresses: string[],
   port: number,
