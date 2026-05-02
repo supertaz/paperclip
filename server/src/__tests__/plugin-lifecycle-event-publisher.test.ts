@@ -230,4 +230,40 @@ describe("plugin lifecycle → lifecycleEventPublisher (WS-3)", () => {
     // DB must show "uninstalled" (soft-delete durable) BEFORE the event fires
     expect(uninstalledCall!.dbStatus).toBe("uninstalled");
   });
+
+  it("hard-delete uninstall: plugin.uninstalled fires after row is deleted from DB", async () => {
+    const publishCalls: Array<{ eventType: string; rowExists: boolean }> = [];
+    const publisher: LifecycleEventPublisher = vi.fn(async (eventType) => {
+      const { eq } = await import("drizzle-orm");
+      const rows = await db.select().from(plugins).where(eq(plugins.pluginKey, "test.hard-delete-uninstall"));
+      publishCalls.push({ eventType, rowExists: rows.length > 0 });
+    });
+
+    const lifecycle = pluginLifecycleManager(db, {
+      lifecycleEventPublisher: publisher,
+    });
+
+    const pluginId = await insertPlugin("test.hard-delete-uninstall", "ready");
+    await lifecycle.unload(pluginId, true);
+
+    const uninstalledCall = publishCalls.find((c) => c.eventType === "plugin.uninstalled");
+    expect(uninstalledCall).toBeDefined();
+    // Row must be hard-deleted from DB BEFORE the event fires
+    expect(uninstalledCall!.rowExists).toBe(false);
+  });
+
+  it("upgrade_pending→ready emits plugin.enabled (not plugin.installed)", async () => {
+    const publisher: LifecycleEventPublisher = vi.fn(async () => {});
+
+    const lifecycle = pluginLifecycleManager(db, {
+      lifecycleEventPublisher: publisher,
+    });
+
+    const pluginId = await insertPlugin("test.upgrade-pending", "upgrade_pending");
+    await lifecycle.enable(pluginId);
+
+    const eventTypes = (publisher as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(eventTypes).toContain("plugin.enabled");
+    expect(eventTypes).not.toContain("plugin.installed");
+  });
 });
