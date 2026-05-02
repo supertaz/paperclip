@@ -2009,7 +2009,7 @@ export function issueRoutes(
 
       const runToInterrupt = await resolveActiveIssueRun(existing);
       if (runToInterrupt) {
-        const cancelled = await heartbeat.cancelRun(runToInterrupt.id);
+        const cancelled = await heartbeat.cancelRun(runToInterrupt.id, "user_initiated");
         if (cancelled) {
           interruptedRunId = cancelled.id;
           await logActivity(db, {
@@ -2187,7 +2187,10 @@ export function issueRoutes(
     let cancelledStatusRunId: string | null = null;
     if (runToCancelForCancelledStatus) {
       try {
-        const cancelled = await heartbeat.cancelRun(runToCancelForCancelledStatus.id);
+        const cancelled = await heartbeat.cancelRun(
+          runToCancelForCancelledStatus.id,
+          actor.actorType === "user" ? "user_initiated" : "system",
+        );
         if (cancelled) {
           cancelledStatusRunId = cancelled.id;
           await logActivity(db, {
@@ -2652,10 +2655,12 @@ export function issueRoutes(
       if (becameTerminal && issue.parentId) {
         const parent = await svc.getWakeableParentAfterChildCompletion(issue.parentId);
         if (parent) {
+          const minuteBucket = Math.floor(Date.now() / 60_000);
           addWakeup(parent.assigneeAgentId, {
             source: "automation",
             triggerDetail: "system",
             reason: "issue_children_completed",
+            idempotencyKey: `issue_children_completed:${parent.id}:${minuteBucket}`,
             payload: {
               issueId: parent.id,
               completedChildIssueId: issue.id,
@@ -2764,22 +2769,25 @@ export function issueRoutes(
 
     const checkoutRunId = requireAgentRunId(req, res);
     if (req.actor.type === "agent" && !checkoutRunId) return;
-    const updated = await svc.checkout(id, req.body.agentId, req.body.expectedStatuses, checkoutRunId);
+    const { isIdempotent, ...updated } = await svc.checkout(id, req.body.agentId, req.body.expectedStatuses, checkoutRunId);
     const actor = getActorInfo(req);
 
-    await logActivity(db, {
-      companyId: issue.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "issue.checked_out",
-      entityType: "issue",
-      entityId: issue.id,
-      details: { agentId: req.body.agentId },
-    });
+    if (!isIdempotent) {
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.checked_out",
+        entityType: "issue",
+        entityId: issue.id,
+        details: { agentId: req.body.agentId },
+      });
+    }
 
     if (
+      !isIdempotent &&
       shouldWakeAssigneeOnCheckout({
         actorType: req.actor.type,
         actorAgentId: req.actor.type === "agent" ? req.actor.agentId ?? null : null,
@@ -3484,7 +3492,7 @@ export function issueRoutes(
 
       const runToInterrupt = await resolveActiveIssueRun(currentIssue);
       if (runToInterrupt) {
-        const cancelled = await heartbeat.cancelRun(runToInterrupt.id);
+        const cancelled = await heartbeat.cancelRun(runToInterrupt.id, "user_initiated");
         if (cancelled) {
           interruptedRunId = cancelled.id;
           await logActivity(db, {
