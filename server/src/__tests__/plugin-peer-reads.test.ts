@@ -205,6 +205,61 @@ describeEmbeddedPostgres("WF-3 peer entity reads — integration", () => {
     ).rejects.toThrow("PluginPeerReadDenied");
   });
 
+  it("peerEntitiesList allows access when provider has NO settings row (default-enabled)", async () => {
+    const companyId = await createCompany();
+    const providerManifest = makeManifest("test.provider", {
+      peerReads: { allow: [{ entityType: "gitea-pr", consumers: ["test.consumer"] }] },
+    });
+    const consumerManifest = makeManifest("test.consumer", {
+      capabilities: ["plugins.peer-reads.read"],
+    });
+
+    const providerId = await installPlugin(providerManifest);
+    const consumerId = await installPlugin(consumerManifest);
+    // Only enable consumer — provider has NO plugin_company_settings row (default-enabled)
+    await enablePluginForCompany(consumerId, companyId);
+
+    const issueId = randomUUID();
+    await seedEntity(providerId, "gitea-pr", issueId);
+
+    // Should succeed: no settings row means enabled by default
+    const rows = await registry.peerEntitiesList(consumerId, {
+      companyId,
+      providerPluginKey: "test.provider",
+      entityType: "gitea-pr",
+    });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("peerEntityGet returns row when provider has NO settings row (default-enabled)", async () => {
+    const companyId = await createCompany();
+    const providerManifest = makeManifest("test.provider", {
+      peerReads: { allow: [{ entityType: "gitea-pr", consumers: ["test.consumer"] }] },
+    });
+    const consumerManifest = makeManifest("test.consumer", {
+      capabilities: ["plugins.peer-reads.read"],
+    });
+
+    const providerId = await installPlugin(providerManifest);
+    const consumerId = await installPlugin(consumerManifest);
+    // Only enable consumer — provider has NO plugin_company_settings row (default-enabled)
+    await enablePluginForCompany(consumerId, companyId);
+
+    const issueId = randomUUID();
+    const externalId = await seedEntity(providerId, "gitea-pr", issueId);
+
+    const result = await registry.peerEntityGet(consumerId, {
+      companyId,
+      providerPluginKey: "test.provider",
+      entityType: "gitea-pr",
+      externalId,
+      scopeKind: "issue",
+      scopeId: issueId,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.externalId).toBe(externalId);
+  });
+
   it("peerEntitiesList enforces max limit of PEER_ENTITY_MAX_LIMIT", async () => {
     const companyId = await createCompany();
     const providerManifest = makeManifest("test.provider", {
