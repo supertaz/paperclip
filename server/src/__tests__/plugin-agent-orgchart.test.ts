@@ -15,6 +15,8 @@ import {
   isDescendantOf,
   ORG_CHART_TOO_LARGE_ERROR,
 } from "../services/plugin-agent-orgchart.js";
+import { pluginCapabilityValidator } from "../services/plugin-capability-validator.js";
+import type { PaperclipPluginManifestV1 } from "@paperclipai/shared";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -301,4 +303,210 @@ describe("plugin-agent-orgchart unit (pure logic)", () => {
     const { ORG_CHART_TOO_LARGE_ERROR } = await import("../services/plugin-agent-orgchart.js");
     expect(ORG_CHART_TOO_LARGE_ERROR).toBe("ORG_CHART_TOO_LARGE");
   });
+});
+
+// --- Tier 4: RBAC matrix (capability validator) ---
+
+describe("plugin-agent-orgchart RBAC matrix (Tier 4)", () => {
+  const validator = pluginCapabilityValidator();
+
+  function manifest(capabilities: string[]): PaperclipPluginManifestV1 {
+    return {
+      id: "test.rbac",
+      apiVersion: 1,
+      version: "1.0.0",
+      displayName: "RBAC Test Plugin",
+      description: "RBAC matrix test",
+      author: "Test",
+      categories: ["automation"],
+      capabilities: capabilities as PaperclipPluginManifestV1["capabilities"],
+      entrypoints: { worker: "dist/worker.js" },
+    };
+  }
+
+  const ops = [
+    "agents.orgChart.getDescendants",
+    "agents.orgChart.getParent",
+    "agents.orgChart.isDescendantOf",
+  ] as const;
+
+  describe("getDescendants and getParent require agents.read + agents.org-chart.read", () => {
+    for (const op of ["agents.orgChart.getDescendants", "agents.orgChart.getParent"] as const) {
+      it(`${op}: allowed with both capabilities`, () => {
+        const m = manifest(["agents.read", "agents.org-chart.read"]);
+        expect(validator.checkOperation(m, op).allowed).toBe(true);
+      });
+
+      it(`${op}: denied with only agents.read (missing agents.org-chart.read)`, () => {
+        const m = manifest(["agents.read"]);
+        const result = validator.checkOperation(m, op);
+        expect(result.allowed).toBe(false);
+        expect(result.missing).toContain("agents.org-chart.read");
+      });
+
+      it(`${op}: denied with only agents.org-chart.read (missing agents.read)`, () => {
+        const m = manifest(["agents.org-chart.read"]);
+        const result = validator.checkOperation(m, op);
+        expect(result.allowed).toBe(false);
+        expect(result.missing).toContain("agents.read");
+      });
+
+      it(`${op}: denied with no capabilities`, () => {
+        const m = manifest([]);
+        const result = validator.checkOperation(m, op);
+        expect(result.allowed).toBe(false);
+        expect(result.missing.length).toBeGreaterThan(0);
+      });
+
+      it(`${op}: denied with unrelated capabilities`, () => {
+        const m = manifest(["issues.read", "http.outbound"]);
+        expect(validator.checkOperation(m, op).allowed).toBe(false);
+      });
+    }
+  });
+
+  describe("isDescendantOf requires only agents.org-chart.read", () => {
+    it("allowed with agents.org-chart.read only (no agents.read needed)", () => {
+      const m = manifest(["agents.org-chart.read"]);
+      expect(validator.checkOperation(m, "agents.orgChart.isDescendantOf").allowed).toBe(true);
+    });
+
+    it("allowed with both agents.read and agents.org-chart.read", () => {
+      const m = manifest(["agents.read", "agents.org-chart.read"]);
+      expect(validator.checkOperation(m, "agents.orgChart.isDescendantOf").allowed).toBe(true);
+    });
+
+    it("denied with only agents.read (missing agents.org-chart.read)", () => {
+      const m = manifest(["agents.read"]);
+      const result = validator.checkOperation(m, "agents.orgChart.isDescendantOf");
+      expect(result.allowed).toBe(false);
+      expect(result.missing).toContain("agents.org-chart.read");
+    });
+
+    it("denied with no capabilities", () => {
+      const m = manifest([]);
+      expect(validator.checkOperation(m, "agents.orgChart.isDescendantOf").allowed).toBe(false);
+    });
+
+    it("denied with unrelated capabilities", () => {
+      const m = manifest(["issues.read"]);
+      expect(validator.checkOperation(m, "agents.orgChart.isDescendantOf").allowed).toBe(false);
+    });
+  });
+
+  describe("getRequiredCapabilities reflects correct requirements", () => {
+    it("getDescendants requires agents.read + agents.org-chart.read", () => {
+      const caps = validator.getRequiredCapabilities("agents.orgChart.getDescendants");
+      expect(new Set(caps)).toEqual(new Set(["agents.read", "agents.org-chart.read"]));
+    });
+
+    it("getParent requires agents.read + agents.org-chart.read", () => {
+      const caps = validator.getRequiredCapabilities("agents.orgChart.getParent");
+      expect(new Set(caps)).toEqual(new Set(["agents.read", "agents.org-chart.read"]));
+    });
+
+    it("isDescendantOf requires only agents.org-chart.read", () => {
+      const caps = validator.getRequiredCapabilities("agents.orgChart.isDescendantOf");
+      expect(caps).toEqual(["agents.org-chart.read"]);
+    });
+  });
+});
+
+// --- 500-agent cap integration test ---
+
+describeEmbeddedPostgres("plugin-agent-orgchart 500-agent cap", () => {
+  let db!: ReturnType<typeof createDb>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-ws2-orgchart-cap-");
+    db = createDb(tempDb.connectionString);
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(agents);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  function issuePrefix(id: string) {
+    return `T${id.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+  }
+
+  it("throws ORG_CHART_TOO_LARGE_ERROR when descendants exceed 500", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "CapTestCo",
+      issuePrefix: issuePrefix(companyId),
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const rootId = randomUUID();
+    await db.insert(agents).values({
+      id: rootId,
+      companyId,
+      name: "Root",
+      role: "general",
+      status: "idle",
+      reportsTo: null,
+    });
+
+    // Seed 501 direct children of root (exceeds 500 cap)
+    const BATCH = 50;
+    const total = 501;
+    for (let i = 0; i < total; i += BATCH) {
+      const batch = Array.from({ length: Math.min(BATCH, total - i) }, (_, j) => ({
+        id: randomUUID(),
+        companyId,
+        name: `Child-${i + j}`,
+        role: "general" as const,
+        status: "idle" as const,
+        reportsTo: rootId,
+      }));
+      await db.insert(agents).values(batch);
+    }
+
+    await expect(getDescendants(db, rootId, companyId)).rejects.toThrow(ORG_CHART_TOO_LARGE_ERROR);
+  }, 30_000);
+
+  it("does not throw for exactly 500 descendants", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "CapTestCo2",
+      issuePrefix: issuePrefix(companyId),
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const rootId = randomUUID();
+    await db.insert(agents).values({
+      id: rootId,
+      companyId,
+      name: "Root",
+      role: "general",
+      status: "idle",
+      reportsTo: null,
+    });
+
+    // Seed exactly 500 direct children (at the limit, should NOT throw)
+    const BATCH = 50;
+    for (let i = 0; i < 500; i += BATCH) {
+      const batch = Array.from({ length: BATCH }, (_, j) => ({
+        id: randomUUID(),
+        companyId,
+        name: `Child-${i + j}`,
+        role: "general" as const,
+        status: "idle" as const,
+        reportsTo: rootId,
+      }));
+      await db.insert(agents).values(batch);
+    }
+
+    const result = await getDescendants(db, rootId, companyId);
+    expect(result).toHaveLength(500);
+  }, 30_000);
 });
