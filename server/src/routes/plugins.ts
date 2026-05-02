@@ -66,6 +66,7 @@ import {
   getActorInfo,
 } from "./authz.js";
 import { validateInstanceConfig } from "../services/plugin-config-validator.js";
+import { createPluginRuntimeConfigService } from "../services/plugin-runtime-config.js";
 import { badRequest, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
 
 /** UI slot declaration extracted from plugin manifest */
@@ -2078,6 +2079,52 @@ export function pluginRoutes(
       const bridgeError = mapRpcErrorToBridgeError(err);
       res.status(502).json(bridgeError);
     }
+  });
+
+  // ===========================================================================
+  // Runtime config routes (operator inspect / clear)
+  // ===========================================================================
+
+  /**
+   * GET /api/plugins/:pluginId/runtime-config
+   *
+   * Returns the current plugin-managed runtime configuration and revision.
+   * Accessible to any board member (read-only inspect).
+   *
+   * Response: { values: Record<string, unknown>; revision: string }
+   * Errors: 404 if plugin not found
+   */
+  router.get("/plugins/:pluginId/runtime-config", async (req, res) => {
+    assertBoardOrgAccess(req);
+    const { pluginId } = req.params;
+    const registry = pluginRegistryService(db);
+    const plugin = await registry.getById(pluginId);
+    if (!plugin) throw notFound("Plugin not found");
+
+    const svc = createPluginRuntimeConfigService(db);
+    const result = await svc.getRuntime(pluginId);
+    res.json(result);
+  });
+
+  /**
+   * DELETE /api/plugins/:pluginId/runtime-config
+   *
+   * Clears all plugin-managed runtime configuration for this plugin.
+   * Restricted to instance admins.
+   *
+   * Response: 204 No Content
+   * Errors: 404 if plugin not found, 403 if not instance admin
+   */
+  router.delete("/plugins/:pluginId/runtime-config", async (req, res) => {
+    assertInstanceAdmin(req);
+    const { pluginId } = req.params;
+    const registry = pluginRegistryService(db);
+    const plugin = await registry.getById(pluginId);
+    if (!plugin) throw notFound("Plugin not found");
+
+    const svc = createPluginRuntimeConfigService(db);
+    await svc.clearRuntime(pluginId);
+    res.status(204).end();
   });
 
   // ===========================================================================

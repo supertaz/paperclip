@@ -62,6 +62,10 @@ export interface RuntimeConfigResult {
   revision: string;
 }
 
+export interface RuntimeConfigMutationResult {
+  revision: string;
+}
+
 /**
  * Service for managing plugin-owned mutable runtime configuration.
  *
@@ -99,7 +103,7 @@ export function createPluginRuntimeConfigService(db: Db) {
   async function setRuntime(
     pluginId: string,
     patch: Record<string, unknown>,
-  ): Promise<RuntimeConfigResult> {
+  ): Promise<RuntimeConfigMutationResult> {
     if (Object.keys(patch).length === 0) {
       throw new Error("patch is empty: at least one key is required");
     }
@@ -147,7 +151,7 @@ export function createPluginRuntimeConfigService(db: Db) {
   async function unsetRuntime(
     pluginId: string,
     key: string,
-  ): Promise<RuntimeConfigResult> {
+  ): Promise<RuntimeConfigMutationResult> {
     validateReservedKeys({ [key]: null });
 
     const existing = await getRuntime(pluginId);
