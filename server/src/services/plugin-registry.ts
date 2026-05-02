@@ -531,6 +531,12 @@ export function pluginRegistryService(db: Db) {
         throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
       }
 
+      // Defense-in-depth: consumer must declare plugins.peer-reads.read capability
+      const consumerManifest = consumer.manifestJson as PaperclipPluginManifestV1;
+      if (!consumerManifest.capabilities?.includes("plugins.peer-reads.read")) {
+        throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
+      }
+
       // Verify provider is enabled for this company.
       // No settings row means the plugin is enabled by default (plugin_company_settings contract).
       const providerEnabled = await db
@@ -600,6 +606,10 @@ export function pluginRegistryService(db: Db) {
       const provider = await getByKey(params.providerPluginKey);
       if (!consumer || !provider || provider.status === "uninstalled") return null;
 
+      // Defense-in-depth: consumer must declare plugins.peer-reads.read capability
+      const consumerManifest = consumer.manifestJson as PaperclipPluginManifestV1;
+      if (!consumerManifest.capabilities?.includes("plugins.peer-reads.read")) return null;
+
       // Verify provider is enabled for this company.
       // No settings row means the plugin is enabled by default (plugin_company_settings contract).
       const providerEnabled = await db
@@ -633,6 +643,7 @@ export function pluginRegistryService(db: Db) {
         .select()
         .from(pluginEntities)
         .where(and(...conditions))
+        .orderBy(asc(pluginEntities.createdAt))
         .then((rows) => (rows[0] as unknown as PluginEntityRecord) ?? null);
     },
 

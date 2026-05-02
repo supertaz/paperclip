@@ -799,10 +799,10 @@ export function buildHostServices(
 
     peerEntities: {
       async list(params) {
-        return registry.peerEntitiesList(pluginId, params) as any;
+        return registry.peerEntitiesList(pluginId, params);
       },
       async get(params) {
-        return registry.peerEntityGet(pluginId, params) as any;
+        return registry.peerEntityGet(pluginId, params);
       },
     },
 

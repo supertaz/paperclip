@@ -1026,7 +1026,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
                 externalId: params.externalId,
                 limit: params.limit,
                 offset: params.offset,
-              }) as any;
+              }) as unknown as Promise<import("./types.js").PeerEntityRecord[]>;
             },
 
             async get(params) {
@@ -1037,7 +1037,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
                 externalId: params.externalId,
                 scopeKind: params.scopeKind,
                 scopeId: params.scopeId,
-              }) as any;
+              }) as unknown as Promise<import("./types.js").PeerEntityRecord | null>;
             },
           },
         },

@@ -407,7 +407,7 @@ const pluginPeerReadEntityDeclarationSchema = z.object({
 });
 
 const pluginPeerReadsDeclarationSchema = z.object({
-  allow: z.array(pluginPeerReadEntityDeclarationSchema).min(1),
+  allow: z.array(pluginPeerReadEntityDeclarationSchema),
 });
 
 // ---------------------------------------------------------------------------
