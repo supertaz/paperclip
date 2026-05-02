@@ -285,6 +285,7 @@ export async function createApp(
       { workerManager },
       { toolDispatcher },
       { workerManager },
+      { lifecycleEventPublisher },
     ),
   );
   api.use(adapterRoutes());

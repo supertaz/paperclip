@@ -617,9 +617,13 @@ export function pluginLifecycleManager(
         );
       }
 
-      // Publish plugin.uninstalled BEFORE teardown so the plugin's worker can
-      // still run cleanup handlers during delivery (WS-3 ordering invariant).
-      // Publisher errors are caught so teardown always proceeds.
+      // Make the uninstall durable in DB first, then publish the event while
+      // the worker is still alive, then tear down the runtime. This ordering
+      // ensures: (a) the event only fires if the DB delete succeeds, and
+      // (b) the subscribing plugin's worker is still running when it receives
+      // plugin.uninstalled so it can execute cleanup handlers.
+      const result = await registry.uninstall(pluginId, removeData);
+
       if (lifecycleEventPublisher) {
         await lifecycleEventPublisher("plugin.uninstalled", plugin).catch((err) => {
           log.warn({ pluginId, err }, "lifecycle publisher failed during unload (teardown will proceed)");
@@ -628,9 +632,6 @@ export function pluginLifecycleManager(
 
       await deactivatePluginRuntime(pluginId, plugin.pluginKey);
       await pluginLoaderInstance.cleanupInstallArtifacts(plugin);
-
-      // Perform the uninstall via registry (handles soft/hard delete)
-      const result = await registry.uninstall(pluginId, removeData);
 
       log.info(
         { pluginId, pluginKey: plugin.pluginKey, removeData },

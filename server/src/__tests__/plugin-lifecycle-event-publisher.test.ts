@@ -210,12 +210,12 @@ describe("plugin lifecycle → lifecycleEventPublisher (WS-3)", () => {
     expect(eventTypes).not.toContain("plugin.installed");
   });
 
-  it("plugin.uninstalled is published only after registry.uninstall marks DB as deleted (F3 durable ordering)", async () => {
-    const publishCalls: Array<{ eventType: string; pluginStillInDb: boolean }> = [];
+  it("plugin.uninstalled is published only after registry.uninstall makes the status durable (F3 durable ordering)", async () => {
+    const publishCalls: Array<{ eventType: string; dbStatus: string | undefined }> = [];
     const publisher: LifecycleEventPublisher = vi.fn(async (eventType) => {
-      const rows = await db.select().from(plugins);
-      const stillInDb = rows.some((r) => r.pluginKey === "test.durable-uninstall");
-      publishCalls.push({ eventType, pluginStillInDb: stillInDb });
+      const { eq } = await import("drizzle-orm");
+      const rows = await db.select().from(plugins).where(eq(plugins.pluginKey, "test.durable-uninstall"));
+      publishCalls.push({ eventType, dbStatus: rows[0]?.status });
     });
 
     const lifecycle = pluginLifecycleManager(db, {
@@ -227,7 +227,7 @@ describe("plugin lifecycle → lifecycleEventPublisher (WS-3)", () => {
 
     const uninstalledCall = publishCalls.find((c) => c.eventType === "plugin.uninstalled");
     expect(uninstalledCall).toBeDefined();
-    // Plugin must NOT still exist in DB when the event fires — durable first, then publish
-    expect(uninstalledCall!.pluginStillInDb).toBe(false);
+    // DB must show "uninstalled" (soft-delete durable) BEFORE the event fires
+    expect(uninstalledCall!.dbStatus).toBe("uninstalled");
   });
 });

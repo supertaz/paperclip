@@ -55,18 +55,22 @@ export function createLifecycleEventPublisher(
 
     await Promise.all(
       companyRows.map(async (row) => {
-        const result = await bus.emit({
-          eventId: randomUUID(),
-          eventType,
-          companyId: row.id,
-          occurredAt,
-          actorType: "system",
-          entityId: record.id,
-          entityType: "plugin",
-          payload,
-        });
-        for (const { pluginId, error } of result.errors) {
-          log.warn({ pluginId, eventType, err: error }, "lifecycle-bridge: plugin event handler failed");
+        try {
+          const result = await bus.emit({
+            eventId: randomUUID(),
+            eventType,
+            companyId: row.id,
+            occurredAt,
+            actorType: "system",
+            entityId: record.id,
+            entityType: "plugin",
+            payload,
+          });
+          for (const { pluginId, error } of result.errors) {
+            log.warn({ pluginId, eventType, err: error }, "lifecycle-bridge: plugin event handler failed");
+          }
+        } catch (err) {
+          log.warn({ err, eventType, companyId: row.id, pluginId: record.id }, "lifecycle-bridge: bus.emit threw for company; skipping");
         }
       }),
     );
