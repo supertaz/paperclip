@@ -277,8 +277,9 @@ export function InstanceExperimentalSettings() {
             </h2>
             {pluginCgroupActive ? (
               <p className="text-sm text-muted-foreground">
-                Active — each plugin worker runs in its own cgroup leaf. Resource limits
-                configured below are enforced by the kernel.
+                Active — each plugin worker process is placed in its own cgroup leaf after
+                fork. Limits apply to the worker process and any child processes it spawns
+                after placement; a brief window between fork and placement is unconstrained.
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">

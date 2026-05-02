@@ -397,6 +397,10 @@ export function createPluginWorkerHandle(
   // Cgroup state
   let cgroupEnforced = false;
   let cgroupError: string | undefined = undefined;
+  // Monotonically incremented on each startInternal() call. Captured in the
+  // teardown closure so that a delayed teardown from a prior generation can
+  // detect that the worker has restarted and skip cgroup.kill + rmdir.
+  let cgroupGeneration = 0;
   let lastCrashAt: number | null = null;
   let backoffTimer: ReturnType<typeof setTimeout> | null = null;
   let nextRestartAt: number | null = null;
@@ -720,14 +724,28 @@ export function createPluginWorkerHandle(
 
     // Tear down the cgroup regardless of whether the exit was intentional.
     // Fire-and-forget: teardown failure must not block the exit handler.
+    // Capture generation so a delayed async teardown can detect whether the
+    // plugin has already been restarted and skip cgroup.kill on the new cgroup.
     if (options.cgroupManager) {
       cgroupEnforced = false;
-      options.cgroupManager.teardown(pluginId).catch((err) =>
-        log.error(
-          { err: err instanceof Error ? err.message : String(err), pluginId },
-          "cgroup teardown failed",
-        ),
-      );
+      const teardownGeneration = cgroupGeneration;
+      const mgr = options.cgroupManager;
+      (async () => {
+        // If the worker was restarted before teardown fires (cgroupGeneration
+        // advanced), skip teardown entirely — the new startInternal owns the cgroup.
+        if (cgroupGeneration !== teardownGeneration) {
+          log.debug({ pluginId }, "cgroup teardown skipped — worker already restarted");
+          return;
+        }
+        try {
+          await mgr.teardown(pluginId);
+        } catch (err) {
+          log.error(
+            { err: err instanceof Error ? err.message : String(err), pluginId },
+            "cgroup teardown failed",
+          );
+        }
+      })();
     }
 
     if (wasIntentional) {
@@ -849,12 +867,20 @@ export function createPluginWorkerHandle(
 
     // Enter cgroup after fork — non-fatal if it fails
     if (options.cgroupManager && child.pid !== undefined) {
+      const thisGeneration = ++cgroupGeneration;
       try {
         await options.cgroupManager.setup(pluginId, options.cgroupLimits ?? {});
-        await options.cgroupManager.enterCgroup(pluginId, child.pid);
-        cgroupEnforced = true;
-        cgroupError = undefined;
-        log.info({ pid: child.pid }, "plugin worker placed in cgroup");
+        // Re-check generation: a very fast crash between setup and enter could
+        // have incremented cgroupGeneration via the exit handler's teardown path.
+        // If generation changed, skip enterCgroup — the new startInternal handles it.
+        if (cgroupGeneration !== thisGeneration) {
+          log.warn({ pid: child.pid }, "cgroup generation advanced during setup — skipping enterCgroup");
+        } else {
+          await options.cgroupManager.enterCgroup(pluginId, child.pid);
+          cgroupEnforced = true;
+          cgroupError = undefined;
+          log.info({ pid: child.pid }, "plugin worker placed in cgroup");
+        }
       } catch (err) {
         cgroupEnforced = false;
         cgroupError = err instanceof Error ? err.message : String(err);
