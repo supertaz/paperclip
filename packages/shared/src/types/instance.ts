@@ -26,12 +26,21 @@ export interface InstanceGeneralSettings {
   backupRetention: BackupRetentionPolicy;
 }
 
+export interface PluginCgroupLimits {
+  memoryHighBytes?: number;
+  memoryMaxBytes?: number;
+  cpuWeight?: number;
+  pidsMax?: number;
+}
+
 export interface InstanceExperimentalSettings {
   enableEnvironments: boolean;
   enableIsolatedWorkspaces: boolean;
   autoRestartDevServerWhenIdle: boolean;
   enableIssueGraphLivenessAutoRecovery: boolean;
   issueGraphLivenessAutoRecoveryLookbackHours: number;
+  pluginCgroupDefaults: PluginCgroupLimits;
+  pluginCgroupOverrides: Record<string, PluginCgroupLimits>;
 }
 
 export interface InstanceSettings {
