@@ -41,6 +41,8 @@ export interface InstanceExperimentalSettings {
   issueGraphLivenessAutoRecoveryLookbackHours: number;
   pluginCgroupDefaults: PluginCgroupLimits;
   pluginCgroupOverrides: Record<string, PluginCgroupLimits>;
+  /** Runtime-only: true when the host has cgroupsv2 delegation active. Never sent in PATCH. */
+  pluginCgroupActive?: boolean;
 }
 
 export interface InstanceSettings {
