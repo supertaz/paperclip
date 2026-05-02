@@ -260,7 +260,7 @@ export function approvalService(db: Db) {
       return db
         .update(approvals)
         .set({
-          status: "canceled",
+          status: "cancelled",
           decisionNote: reason ?? null,
           decidedAt: now,
           updatedAt: now,

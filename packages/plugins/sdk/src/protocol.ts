@@ -522,7 +522,7 @@ export interface HostToWorkerMethods {
   "approvals.resolved": [
     params: {
       approvalId: string;
-      status: "approved" | "rejected" | "canceled";
+      status: "approved" | "rejected" | "cancelled";
       decisionNote: string | null;
       decidedByUserId: string | null;
       decidedAt: string;
@@ -582,7 +582,7 @@ export interface PluginApproval {
   sourcePluginKey: string;
   issueId: string | null;
   prompt: string;
-  status: "pending" | "approved" | "rejected" | "canceled";
+  status: "pending" | "approved" | "rejected" | "cancelled";
   payload: Record<string, unknown>;
   decisionNote: string | null;
   decidedByUserId: string | null;
@@ -594,7 +594,7 @@ export interface PluginApproval {
 /** Payload delivered to `ctx.approvals.onResolved` handlers. */
 export interface PluginApprovalResolutionEvent {
   approvalId: string;
-  status: "approved" | "rejected" | "canceled";
+  status: "approved" | "rejected" | "cancelled";
   decisionNote: string | null;
   decidedByUserId: string | null;
   decidedAt: string;

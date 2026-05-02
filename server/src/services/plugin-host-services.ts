@@ -1916,7 +1916,7 @@ export function buildHostServices(
           sourcePluginKey: row.sourcePluginKey ?? pluginKey,
           issueId,
           prompt: typeof rowPayload.prompt === "string" ? rowPayload.prompt : "",
-          status: row.status as "pending" | "approved" | "rejected" | "canceled",
+          status: row.status as "pending" | "approved" | "rejected" | "cancelled",
           payload: rowPayload,
           decisionNote: row.decisionNote ?? null,
           decidedByUserId: row.decidedByUserId ?? null,
@@ -1941,7 +1941,7 @@ export function buildHostServices(
             sourcePluginKey: row.sourcePluginKey ?? pluginKey,
             issueId: null,
             prompt: typeof rowPayload.prompt === "string" ? rowPayload.prompt : "",
-            status: row.status as "pending" | "approved" | "rejected" | "canceled",
+            status: row.status as "pending" | "approved" | "rejected" | "cancelled",
             payload: rowPayload,
             decisionNote: row.decisionNote ?? null,
             decidedByUserId: row.decidedByUserId ?? null,
@@ -1971,7 +1971,7 @@ export function buildHostServices(
           const now = new Date().toISOString();
           notifyWorker("approvals.resolved", {
             approvalId: params.approvalId,
-            status: "canceled",
+            status: "cancelled",
             decisionNote: params.reason ?? null,
             decidedByUserId: null,
             decidedAt: now,

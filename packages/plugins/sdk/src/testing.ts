@@ -1256,7 +1256,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         const now = new Date().toISOString();
         approvalsStore.set(params.approvalId, {
           ...approval,
-          status: "canceled",
+          status: "cancelled",
           decisionNote: params.reason ?? null,
           decidedAt: now,
           updatedAt: now,
