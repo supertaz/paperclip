@@ -51,7 +51,7 @@ describeEmbeddedPostgres("WF-3 peer entity reads — integration", () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-peer-reads-");
     db = createDb(tempDb.connectionString);
     registry = pluginRegistryService(db);
-  }, 20_000);
+  }, 60_000);
 
   afterEach(async () => {
     await db.delete(pluginEntities);
