@@ -8,7 +8,6 @@ import {
 function input(overrides: Partial<ReachableUrlInput> = {}): ReachableUrlInput {
   return {
     bindHost: "0.0.0.0",
-    deploymentMode: "authenticated",
     deploymentExposure: "public",
     authPublicBaseUrl: "https://example.com",
     pathname: "/api/webhooks/gitea",
@@ -21,7 +20,6 @@ describe("resolveReachableUrl", () => {
     it("returns loopback_bind for bindHost=127.0.0.1 regardless of other config", () => {
       const result = resolveReachableUrl(input({
         bindHost: "127.0.0.1",
-        deploymentMode: "authenticated",
         deploymentExposure: "public",
         authPublicBaseUrl: "https://example.com",
       }));
@@ -124,6 +122,24 @@ describe("resolveReachableUrl", () => {
       expect(result.url).toBeTruthy();
       expect("reason" in result && result.reason).toBeFalsy();
     });
+
+    it("constructs valid URL for localhost with port (http scheme)", () => {
+      const result = resolveReachableUrl(input({ authPublicBaseUrl: "http://localhost:3000" }));
+      expect(result).toEqual({ url: "http://localhost:3000/api/webhooks/gitea" });
+    });
+
+    it("constructs valid URL for IPv6 address with brackets", () => {
+      const result = resolveReachableUrl(input({
+        authPublicBaseUrl: "https://[::1]:8080",
+        pathname: "/hook",
+      }));
+      expect(result).toEqual({ url: "https://[::1]:8080/hook" });
+    });
+
+    it("constructs valid URL with non-standard port", () => {
+      const result = resolveReachableUrl(input({ authPublicBaseUrl: "https://example.com:8443" }));
+      expect(result).toEqual({ url: "https://example.com:8443/api/webhooks/gitea" });
+    });
   });
 
   describe("pathname validation", () => {
@@ -189,24 +205,6 @@ describe("resolveReachableUrl", () => {
     it("returns invalid_base_url for bare hostname without scheme", () => {
       const result = resolveReachableUrl(input({ authPublicBaseUrl: "myhost.example.com" }));
       expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.invalidBaseUrl });
-    });
-
-    it("constructs valid URL for localhost with port (http scheme)", () => {
-      const result = resolveReachableUrl(input({ authPublicBaseUrl: "http://localhost:3000" }));
-      expect(result).toEqual({ url: "http://localhost:3000/api/webhooks/gitea" });
-    });
-
-    it("constructs valid URL for IPv6 address with brackets", () => {
-      const result = resolveReachableUrl(input({
-        authPublicBaseUrl: "https://[::1]:8080",
-        pathname: "/hook",
-      }));
-      expect(result).toEqual({ url: "https://[::1]:8080/hook" });
-    });
-
-    it("constructs valid URL with non-standard port", () => {
-      const result = resolveReachableUrl(input({ authPublicBaseUrl: "https://example.com:8443" }));
-      expect(result).toEqual({ url: "https://example.com:8443/api/webhooks/gitea" });
     });
   });
 

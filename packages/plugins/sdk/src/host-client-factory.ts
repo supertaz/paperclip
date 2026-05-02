@@ -220,8 +220,8 @@ export interface HostServices {
     update(params: WorkerToHostMethods["goals.update"][0]): Promise<WorkerToHostMethods["goals.update"][1]>;
   };
 
-  /** Provides `host.getReachableUrl`. Requires `host.urls.discover` capability. */
-  host: {
+  /** Provides `host.getReachableUrl`. Requires `host.urls.discover` capability. Optional — only needed when the plugin declares this capability. */
+  host?: {
     getReachableUrl(params: WorkerToHostMethods["host.getReachableUrl"][0]): Promise<WorkerToHostMethods["host.getReachableUrl"][1]>;
   };
 }
@@ -650,6 +650,7 @@ export function createHostClientHandlers(
 
     // Host URL discovery
     "host.getReachableUrl": gated("host.getReachableUrl", async (params) => {
+      if (!services.host) throw new Error("host service not provided");
       return services.host.getReachableUrl(params);
     }),
   };

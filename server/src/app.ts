@@ -273,7 +273,6 @@ export async function createApp(
             getReachableUrl: ({ pathname }: { pathname: string }) =>
               Promise.resolve(resolveReachableUrl({
                 bindHost: opts.bindHost,
-                deploymentMode: opts.deploymentMode,
                 deploymentExposure: opts.deploymentExposure,
                 authPublicBaseUrl: opts.authPublicBaseUrl,
                 pathname,
