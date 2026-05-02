@@ -52,6 +52,10 @@ export interface TestHarnessOptions {
   capabilities?: PluginCapability[];
   /** Initial config returned by `ctx.config.get()`. */
   config?: Record<string, unknown>;
+  /** Override host service implementations for testing plugin host-call behaviour. */
+  host?: {
+    getReachableUrl?: (params: { pathname: string }) => Promise<import("./types.js").ReachableUrlResult>;
+  };
 }
 
 export interface TestHarnessLogEntry {
@@ -477,7 +481,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const ctx: PluginContext = {
     manifest,
     host: {
-      async getReachableUrl() {
+      async getReachableUrl(params) {
+        if (options.host?.getReachableUrl) return options.host.getReachableUrl(params);
         return { url: null, reason: "loopback_bind" };
       },
     },
