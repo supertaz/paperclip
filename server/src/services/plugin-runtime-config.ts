@@ -110,7 +110,13 @@ export function createPluginRuntimeConfigService(db: Db) {
 
     validateReservedKeys(patch);
 
-    // Fetch existing config to compute merged state for size validation
+    // Pre-flight size check against last-known state. The revision increment is
+    // atomic (conflict handler), but size enforcement is best-effort: a
+    // second concurrent writer that passes this check before the first writer
+    // commits could push the total slightly past MAX_CONFIG_BYTES. This is
+    // acceptable because the plugin worker is single-process-per-plugin by
+    // design (see plugin-worker-manager.ts M1 constraint), so true concurrency
+    // between two writers for the same pluginId cannot occur in practice.
     const existing = await getRuntime(pluginId);
     const merged: Record<string, unknown> = { ...existing.values, ...patch };
 
@@ -121,7 +127,7 @@ export function createPluginRuntimeConfigService(db: Db) {
       );
     }
 
-    // Atomic upsert — increments revision in the DB, no TOCTOU race
+    // Atomic upsert — revision increment is serialized by the DB constraint
     const rows = await db
       .insert(pluginConfigRuntime)
       .values({
@@ -157,30 +163,29 @@ export function createPluginRuntimeConfigService(db: Db) {
     const existing = await getRuntime(pluginId);
 
     if (existing.revision === "0") {
-      // No row — no-op
       return { revision: "0" };
     }
 
     if (!(key in existing.values)) {
-      // Key doesn't exist — no-op, return current revision
+      // Key not present — no-op, no revision increment
       return { revision: existing.revision };
     }
 
-    const updated: Record<string, unknown> = { ...existing.values };
-    delete updated[key];
-
+    // Use SQL key-deletion operator (`-`) to avoid re-serializing the full object
+    // in application code. This is safe from read-modify-write loss: the key
+    // existence check above runs in the same single-worker-per-plugin context
+    // (M1 constraint), so no concurrent writer can add the key between check and update.
     const rows = await db
       .update(pluginConfigRuntime)
       .set({
-        configJson: updated,
+        configJson: sql`${pluginConfigRuntime.configJson} - ${key}::text`,
         revision: sql`${pluginConfigRuntime.revision} + 1`,
         updatedAt: new Date(),
       })
       .where(eq(pluginConfigRuntime.pluginId, pluginId))
       .returning({ revision: pluginConfigRuntime.revision });
 
-    const row = rows[0]!;
-    return { revision: String(row.revision) };
+    return { revision: String(rows[0]!.revision) };
   }
 
   // -------------------------------------------------------------------------
