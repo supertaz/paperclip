@@ -23,7 +23,7 @@ function createApp(
   const router = containerProbeRoutes({ probe: probeFn ?? (async () => ({ ok: true, summary: "Docker 24.0.0" })) });
   app.use("/api", router);
   app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    res.status((err as any).statusCode ?? 500).json({ error: err.message });
+    res.status((err as any).status ?? (err as any).statusCode ?? 500).json({ error: err.message });
   });
   return app;
 }
