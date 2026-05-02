@@ -32,7 +32,10 @@ describe("validateReservedKeys (unit)", () => {
   });
 
   it("rejects __proto__", () => {
-    expect(() => validateReservedKeys({ __proto__: {} })).toThrow(/reserved/i);
+    // Object literal { __proto__: {} } is intercepted by V8 (sets prototype, not own key).
+    // The real attack vector is JSON-parsed input which produces an own key named "__proto__".
+    const parsed = JSON.parse('{"__proto__":{}}') as Record<string, unknown>;
+    expect(() => validateReservedKeys(parsed)).toThrow(/reserved/i);
   });
 
   it("rejects constructor", () => {
@@ -97,17 +100,19 @@ describeEmbeddedPostgres("plugin-runtime-config service (integration)", () => {
     await db.insert(plugins).values([
       {
         id: pluginId,
-        key: "test.plugin.a",
-        displayName: "Test Plugin A",
+        pluginKey: "test.plugin.a",
+        packageName: "@test/plugin-a",
+        version: "0.0.1",
         manifestJson: {} as any,
-        status: "ready",
+        status: "installed",
       },
       {
         id: pluginId2,
-        key: "test.plugin.b",
-        displayName: "Test Plugin B",
+        pluginKey: "test.plugin.b",
+        packageName: "@test/plugin-b",
+        version: "0.0.1",
         manifestJson: {} as any,
-        status: "ready",
+        status: "installed",
       },
     ]);
   }, 20_000);
@@ -171,7 +176,9 @@ describeEmbeddedPostgres("plugin-runtime-config service (integration)", () => {
   // -------------------------------------------------------------------------
 
   it("setRuntime rejects reserved key __proto__", async () => {
-    await expect(svc.setRuntime(pluginId, { __proto__: {} })).rejects.toThrow(/reserved/i);
+    // Object literal { __proto__: {} } is intercepted by V8; use JSON.parse for the real attack vector.
+    const parsed = JSON.parse('{"__proto__":{}}') as Record<string, unknown>;
+    await expect(svc.setRuntime(pluginId, parsed)).rejects.toThrow(/reserved/i);
   });
 
   it("setRuntime rejects key with leading dot", async () => {
@@ -285,10 +292,11 @@ describeEmbeddedPostgres("plugin-runtime-config service (integration)", () => {
     // Re-seed plugin for future tests
     await db.insert(plugins).values({
       id: pluginId,
-      key: "test.plugin.a",
-      displayName: "Test Plugin A",
+      pluginKey: "test.plugin.a",
+      packageName: "@test/plugin-a",
+      version: "0.0.1",
       manifestJson: {} as any,
-      status: "ready",
+      status: "installed",
     });
   });
 });
