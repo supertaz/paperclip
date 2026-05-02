@@ -56,9 +56,12 @@ export function createPluginCgroupManager(
       return false;
     }
     try {
-      await readFile(path.join(cgroupRoot, "cgroup.controllers"), "utf8");
-      supportedCache = true;
-      return true;
+      const content = await readFile(path.join(cgroupRoot, "cgroup.controllers"), "utf8");
+      // Require at least one of the controllers we actually use.
+      const controllers = content.trim().split(/\s+/);
+      const hasUsable = controllers.some((c) => ["memory", "pids", "cpu"].includes(c));
+      supportedCache = hasUsable;
+      return hasUsable;
     } catch {
       supportedCache = false;
       return false;

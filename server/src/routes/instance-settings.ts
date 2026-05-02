@@ -80,6 +80,16 @@ export function instanceSettingsRoutes(db: Db, opts?: InstanceSettingsRoutesOpti
 
   router.patch(
     "/instance/settings/experimental",
+    (req, _res, next) => {
+      // pluginCgroupActive is a runtime-only field injected by GET — strip it
+      // before schema validation so a client round-tripping GET→PATCH doesn't
+      // get rejected by the strict schema.
+      if (req.body && typeof req.body === "object") {
+        const { pluginCgroupActive: _, ...rest } = req.body as Record<string, unknown>;
+        req.body = rest;
+      }
+      next();
+    },
     validate(patchInstanceExperimentalSettingsSchema),
     async (req, res) => {
       assertCanManageInstanceSettings(req);

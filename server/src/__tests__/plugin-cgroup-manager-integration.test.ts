@@ -26,10 +26,12 @@ const PLUGIN_CGROUP_PATH = path.join(TEST_CGROUP_ROOT, "paperclip-plugins", "plu
 async function cgroupsv2Available(): Promise<boolean> {
   if (platform() !== "linux") return false;
   try {
-    await readFile(path.join(APP_SLICE, "cgroup.controllers"), "utf8");
-    return true;
-  } catch {
-    return false;
+    const content = await readFile(path.join(APP_SLICE, "cgroup.controllers"), "utf8");
+    return content.trim().length > 0;
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EACCES") return false;
+    throw err;
   }
 }
 
@@ -45,8 +47,9 @@ async function ensureTestSlice(): Promise<void> {
       path.join(TEST_CGROUP_ROOT, "cgroup.subtree_control"),
       toEnable.map((c) => `+${c}`).join(" "),
       "utf8",
-    ).catch(() => {
-      // Controllers may already be enabled; ignore EINVAL on re-write
+    ).catch((err: NodeJS.ErrnoException) => {
+      // EINVAL: already enabled or not available in this host's delegation — ignore
+      if (err.code !== "EINVAL") throw err;
     });
   }
 }
@@ -55,10 +58,16 @@ describe("PluginCgroupManager — integration tests (real cgroupsv2)", () => {
   let supported = false;
 
   beforeEach(async () => {
-    supported = await cgroupsv2Available();
-    if (supported) {
-      await ensureTestSlice();
+    if (!await cgroupsv2Available()) {
+      supported = false;
+      return;
     }
+    await ensureTestSlice();
+    // Use the manager's isSupported() which checks actual controller availability
+    // inside TEST_CGROUP_ROOT, not just that cgroupsv2 exists. CI runners may have
+    // cgroupsv2 but without pids/memory/cpu delegation into the slice.
+    const manager = createPluginCgroupManager({ cgroupRoot: TEST_CGROUP_ROOT });
+    supported = await manager.isSupported();
   });
 
   afterEach(async () => {
