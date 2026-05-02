@@ -508,6 +508,94 @@ describe("RPC issueCustomFields capability gating", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Registry lookup deduplication — set() and listForIssue() must call
+// registry.getById exactly once (not once in ensurePluginCapability + again
+// for manifest/displayName lookup).
+// ---------------------------------------------------------------------------
+
+describe("issueCustomFields registry.getById deduplication", () => {
+  const companyId = "company-1";
+  const issueId = "issue-1";
+  const pluginId = "plugin-a";
+  const pluginKey = "paperclip.example";
+
+  function makeSpyDb() {
+    let selectCallCount = 0;
+    const pluginRow = {
+      id: pluginId,
+      pluginKey,
+      manifestJson: {
+        id: pluginKey,
+        displayName: "Example",
+        capabilities: ["issue.custom-fields.write", "issue.custom-fields.read"],
+        customFields: [{ key: "score", label: "Score", type: "number" }],
+      },
+    };
+    const db = {
+      select: vi.fn(() => {
+        selectCallCount++;
+        return {
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(async () => [pluginRow]),
+              then: (fn: (rows: unknown[]) => unknown) => Promise.resolve(fn([pluginRow])),
+            })),
+            innerJoin: vi.fn(() => ({
+              where: vi.fn(async () => []),
+            })),
+          })),
+        };
+      }),
+      insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({
+            returning: vi.fn(async () => []),
+          })),
+        })),
+      })),
+      transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn({
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              for: vi.fn(() => ({
+                limit: vi.fn(async () => [{ id: issueId }]),
+              })),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn(async () => undefined),
+          })),
+        })),
+        insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
+      })),
+    } as unknown as import("@paperclipai/db").Db;
+    return { db, getSelectCallCount: () => selectCallCount };
+  }
+
+  it("set() calls registry.getById exactly once (not twice)", async () => {
+    const { db, getSelectCallCount } = makeSpyDb();
+    const svc = buildHostServices(db, pluginId, pluginKey, makeEventBus());
+    await svc.issueCustomFields.set({ companyId, issueId, key: "score", value: "10" });
+    // ensurePluginCapability fetches row once; set() must reuse it, not call again
+    expect(getSelectCallCount()).toBe(1);
+    svc.dispose();
+  });
+
+  it("listForIssue() calls registry.getById exactly once (not twice)", async () => {
+    const { db, getSelectCallCount } = makeSpyDb();
+    const svc = buildHostServices(db, pluginId, pluginKey, makeEventBus());
+    await svc.issueCustomFields.listForIssue({ companyId, issueId });
+    // ensurePluginCapability fetches row once (select #1); listForIssue data query is select #2.
+    // Before fix: 3 selects (cap check + manifest lookup + data). After fix: 2.
+    expect(getSelectCallCount()).toBe(2);
+    svc.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Activity-log suppression on no-op unset
 // ---------------------------------------------------------------------------
 
