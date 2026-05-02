@@ -313,6 +313,7 @@ function stopReasonLabel(run: RunForIssue) {
   }
   if (stopReason === "budget_paused") return "budget paused";
   if (stopReason === "cancelled") return "cancelled";
+  if (stopReason === "plugin_gate") return "cancelled by plugin gate";
   if (stopReason === "paused") return "paused by board";
   if (stopReason === "process_lost") return "process lost";
   if (stopReason === "adapter_failed") return "adapter failed";
