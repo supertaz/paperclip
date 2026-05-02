@@ -10,7 +10,7 @@ function makeManifest(overrides: Partial<PaperclipPluginManifestV1> = {}): Paper
     displayName: "Test Provider",
     description: "Test",
     author: "Test",
-    categories: ["productivity"],
+    categories: ["automation"],
     capabilities: [],
     entrypoints: { worker: "dist/worker.js" },
     ...overrides,
