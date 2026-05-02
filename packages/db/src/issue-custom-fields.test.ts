@@ -30,6 +30,25 @@ afterEach(async () => {
   }
 });
 
+type Sql = ReturnType<typeof postgres>;
+
+async function insertTestParents(sql: Sql) {
+  const [company] = await sql`
+    INSERT INTO companies (name) VALUES ('test-co') RETURNING id
+  `;
+  const [plugin] = await sql`
+    INSERT INTO plugins (plugin_key, package_name, version, api_version, manifest_json)
+    VALUES ('test.plugin', 'test-plugin', '1.0.0', 1, '{}')
+    RETURNING id
+  `;
+  const [issue] = await sql`
+    INSERT INTO issues (company_id, title, status, priority, origin_kind, request_depth)
+    VALUES (${company.id}, 'Test issue', 'backlog', 'medium', 'manual', 0)
+    RETURNING id
+  `;
+  return { companyId: company.id as string, issueId: issue.id as string, pluginId: plugin.id as string };
+}
+
 describe("issue_custom_fields migration", () => {
   it("creates the issue_custom_fields table with correct columns", async () => {
     const connectionString = await createTempDatabase();
@@ -134,9 +153,7 @@ describe("issue_custom_fields migration", () => {
 
     const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
     try {
-      const companyId = (await sql`SELECT gen_random_uuid() as id`)[0].id;
-      const issueId = (await sql`SELECT gen_random_uuid() as id`)[0].id;
-      const pluginId = (await sql`SELECT gen_random_uuid() as id`)[0].id;
+      const { companyId, issueId, pluginId } = await insertTestParents(sql);
 
       await sql`
         INSERT INTO issue_custom_fields
@@ -160,9 +177,7 @@ describe("issue_custom_fields migration", () => {
 
     const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
     try {
-      const companyId = (await sql`SELECT gen_random_uuid() as id`)[0].id;
-      const issueId = (await sql`SELECT gen_random_uuid() as id`)[0].id;
-      const pluginId = (await sql`SELECT gen_random_uuid() as id`)[0].id;
+      const { companyId, issueId, pluginId } = await insertTestParents(sql);
 
       await sql`
         INSERT INTO issue_custom_fields
