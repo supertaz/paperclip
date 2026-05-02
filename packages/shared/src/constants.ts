@@ -619,6 +619,9 @@ export const PLUGIN_CAPABILITIES = [
   // Plugin State
   "plugin.state.read",
   "plugin.state.write",
+  // Approvals
+  "approvals.create",
+  "approvals.read",
   // Runtime / Integration
   "events.subscribe",
   "events.emit",
