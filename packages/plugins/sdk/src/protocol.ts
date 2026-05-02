@@ -582,7 +582,14 @@ export interface PluginApproval {
   sourcePluginKey: string;
   issueId: string | null;
   prompt: string;
-  status: "pending" | "approved" | "rejected" | "cancelled";
+  /**
+   * Current approval status. Treat `"revision_requested"` the same as
+   * `"pending"` — a board reviewer has asked for more information but has not
+   * yet reached a final decision. `onResolved` does NOT fire for
+   * `"revision_requested"` transitions; only `approved`, `rejected`, and
+   * `cancelled` trigger the callback.
+   */
+  status: "pending" | "approved" | "rejected" | "cancelled" | "revision_requested";
   payload: Record<string, unknown>;
   decisionNote: string | null;
   decidedByUserId: string | null;

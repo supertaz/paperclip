@@ -1437,6 +1437,14 @@ import type { PluginApproval, PluginApprovalResolutionEvent } from "./protocol.j
  *
  * Push delivery via `onResolved` is best-effort. Plugin code must reconcile
  * state on restart by calling `list({ status: "pending" })`.
+ *
+ * **Status lifecycle for plugin approvals:**
+ * - `"pending"` — awaiting a board decision
+ * - `"revision_requested"` — board has asked for more information; treat the
+ *   same as `"pending"` (still awaiting a final decision). `onResolved` does
+ *   NOT fire for this transition.
+ * - `"approved"` / `"rejected"` / `"cancelled"` — terminal states that trigger
+ *   `onResolved` callbacks.
  */
 export interface PluginApprovalsClient {
   create(params: {
