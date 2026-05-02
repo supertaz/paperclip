@@ -184,7 +184,11 @@ export async function createApp(
   const containerEngineSettings = generalSettings.containerEngine;
   const dockerDriver =
     containerEngineSettings.driver !== "disabled"
-      ? createDockerDriver({ cliBin: containerEngineSettings.driver })
+      ? createDockerDriver({
+          cliBin: containerEngineSettings.driver,
+          networkMode: containerEngineSettings.networkMode,
+          allowRootUser: containerEngineSettings.allowRootUser,
+        })
       : null;
   const containerService = dockerDriver
     ? createContainerService({

@@ -24,6 +24,10 @@ export interface DockerDriverOpts {
   defaultMemoryMb?: number;
   /** Default pids limit for containers. */
   defaultPidsLimit?: number;
+  /** Network mode for containers. Defaults to "none". */
+  networkMode?: "none" | "bridge";
+  /** When true, omits the --user=65534:65534 flag (operator opt-in only). */
+  allowRootUser?: boolean;
 }
 
 const DEFAULT_PIDS_LIMIT = 256;
@@ -118,6 +122,8 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
   const runner = opts.cliRunner ?? makeSpawnRunner(cliBin, opts.socketPath);
   const defaultMemoryMb = opts.defaultMemoryMb ?? DEFAULT_MEMORY_MB;
   const defaultPidsLimit = opts.defaultPidsLimit ?? DEFAULT_PIDS_LIMIT;
+  const networkMode = opts.networkMode ?? "none";
+  const allowRootUser = opts.allowRootUser ?? false;
 
   async function run(args: string[], runOpts?: { timeoutMs?: number }): Promise<CliRunnerResult> {
     const env = safeEnv();
@@ -137,11 +143,13 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
       args.push("--cap-drop=ALL");
       args.push("--security-opt=no-new-privileges:true");
       args.push("--pids-limit=" + String(defaultPidsLimit));
-      args.push("--user=65534:65534");
+      if (!allowRootUser) {
+        args.push("--user=65534:65534");
+      }
       args.push("--read-only");
 
-      // Network (default none, bridge only with operator opt-in)
-      args.push("--network=none");
+      // Network mode (operator-configured; plugins cannot override)
+      args.push(`--network=${networkMode}`);
 
       // Resource limits
       const memMb = startOpts.memoryMb ?? defaultMemoryMb;
@@ -182,7 +190,10 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
     },
 
     async kill(engineContainerId) {
-      await run(["rm", "-f", engineContainerId]);
+      const result = await run(["rm", "-f", engineContainerId]);
+      if (result.exitCode !== 0) {
+        throw new Error(`docker rm -f failed: ${result.stderr}`);
+      }
     },
 
     async exec(engineContainerId, cmd, execOpts) {

@@ -188,10 +188,12 @@ export function createContainerService(opts: ContainerServiceOpts): ContainerSer
         ? Math.min(opts.memoryMb ?? memoryMbMax, memoryMbMax)
         : opts.memoryMb;
 
-      // Always apply a bounded lifetime: use plugin value if lower than max, else max
+      // Always apply a bounded lifetime. Non-positive plugin value treated as "use service default".
       const resolvedLifetime = maxLifetimeSec !== undefined
-        ? Math.min(opts.maxLifetimeSec ?? maxLifetimeSec, maxLifetimeSec)
-        : opts.maxLifetimeSec;
+        ? (opts.maxLifetimeSec !== undefined && opts.maxLifetimeSec > 0
+            ? Math.min(opts.maxLifetimeSec, maxLifetimeSec)
+            : maxLifetimeSec)
+        : (opts.maxLifetimeSec !== undefined && opts.maxLifetimeSec > 0 ? opts.maxLifetimeSec : undefined);
 
       const { engineContainerId } = await driver.start({
         ...opts,

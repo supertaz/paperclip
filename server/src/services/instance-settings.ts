@@ -133,9 +133,13 @@ export function instanceSettingsService(db: Db) {
 
     updateGeneral: async (patch: PatchInstanceGeneralSettings): Promise<InstanceSettings> => {
       const current = await getOrCreateRow();
+      const currentNormalized = normalizeGeneralSettings(current.general);
       const nextGeneral = normalizeGeneralSettings({
-        ...normalizeGeneralSettings(current.general),
+        ...currentNormalized,
         ...patch,
+        containerEngine: patch.containerEngine
+          ? { ...currentNormalized.containerEngine, ...patch.containerEngine }
+          : currentNormalized.containerEngine,
       });
       const now = new Date();
       const [updated] = await db
