@@ -90,6 +90,16 @@ describeEmbeddedPostgres("WF-3 peer entity reads — integration", () => {
     });
   }
 
+  async function disablePluginForCompany(pluginId: string, companyId: string): Promise<void> {
+    await db.insert(pluginCompanySettings).values({
+      id: randomUUID(),
+      pluginId,
+      companyId,
+      enabled: false,
+      settingsJson: {},
+    });
+  }
+
   async function createCompany(): Promise<string> {
     const id = randomUUID();
     await db.insert(companies).values({
@@ -194,7 +204,8 @@ describeEmbeddedPostgres("WF-3 peer entity reads — integration", () => {
     const providerId = await installPlugin(providerManifest);
     const consumerId = await installPlugin(consumerManifest);
     await enablePluginForCompany(consumerId, companyId);
-    // Note: provider NOT enabled for company
+    // Explicitly disable provider for this company
+    await disablePluginForCompany(providerId, companyId);
 
     await expect(
       registry.peerEntitiesList(consumerId, {

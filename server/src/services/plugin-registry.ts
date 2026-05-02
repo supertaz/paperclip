@@ -531,7 +531,8 @@ export function pluginRegistryService(db: Db) {
         throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
       }
 
-      // Verify provider is enabled for this company
+      // Verify provider is enabled for this company.
+      // No settings row means the plugin is enabled by default (plugin_company_settings contract).
       const providerEnabled = await db
         .select({ enabled: pluginCompanySettings.enabled })
         .from(pluginCompanySettings)
@@ -541,7 +542,7 @@ export function pluginRegistryService(db: Db) {
             eq(pluginCompanySettings.companyId, params.companyId),
           ),
         )
-        .then((rows) => rows[0]?.enabled ?? false);
+        .then((rows) => rows[0]?.enabled ?? true);
       if (!providerEnabled) {
         throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
       }
@@ -597,7 +598,8 @@ export function pluginRegistryService(db: Db) {
       const provider = await getByKey(params.providerPluginKey);
       if (!consumer || !provider) return null;
 
-      // Verify provider is enabled for this company
+      // Verify provider is enabled for this company.
+      // No settings row means the plugin is enabled by default (plugin_company_settings contract).
       const providerEnabled = await db
         .select({ enabled: pluginCompanySettings.enabled })
         .from(pluginCompanySettings)
@@ -607,7 +609,7 @@ export function pluginRegistryService(db: Db) {
             eq(pluginCompanySettings.companyId, params.companyId),
           ),
         )
-        .then((rows) => rows[0]?.enabled ?? false);
+        .then((rows) => rows[0]?.enabled ?? true);
       if (!providerEnabled) return null;
 
       const access = checkPeerEntityAccess(
