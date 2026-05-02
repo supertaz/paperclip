@@ -2124,6 +2124,10 @@ export function pluginRoutes(
 
     const svc = createPluginRuntimeConfigService(db);
     await svc.clearRuntime(pluginId);
+    await logPluginMutationActivity(req, "plugin.runtime-config.cleared", pluginId, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+    });
     res.status(204).end();
   });
 
