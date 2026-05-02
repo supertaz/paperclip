@@ -246,6 +246,30 @@ export function approvalService(db: Db) {
         .then((comments) => comments.map((comment) => redactApprovalComment(comment, censorUsernameInLogs)));
     },
 
+    listByPlugin: (pluginId: string, companyId: string, status?: string) => {
+      const conditions = [
+        eq(approvals.companyId, companyId),
+        eq(approvals.sourcePluginId, pluginId),
+      ];
+      if (status) conditions.push(eq(approvals.status, status));
+      return db.select().from(approvals).where(and(...conditions));
+    },
+
+    cancel: (id: string, reason?: string | null) => {
+      const now = new Date();
+      return db
+        .update(approvals)
+        .set({
+          status: "canceled",
+          decisionNote: reason ?? null,
+          decidedAt: now,
+          updatedAt: now,
+        })
+        .where(and(eq(approvals.id, id), eq(approvals.status, "pending")))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+    },
+
     addComment: async (
       approvalId: string,
       body: string,

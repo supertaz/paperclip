@@ -162,6 +162,19 @@ export function approvalRoutes(
         },
       });
 
+      if (approval.sourcePluginId && options.pluginWorkerManager) {
+        const worker = options.pluginWorkerManager.getWorker(approval.sourcePluginId);
+        if (worker) {
+          worker.notify("approvals.resolved", {
+            approvalId: approval.id,
+            status: "approved",
+            decisionNote: approval.decisionNote ?? null,
+            decidedByUserId: approval.decidedByUserId ?? null,
+            decidedAt: approval.decidedAt?.toISOString() ?? new Date().toISOString(),
+          });
+        }
+      }
+
       if (approval.requestedByAgentId) {
         try {
           const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
@@ -240,6 +253,19 @@ export function approvalRoutes(
     const { approval, applied } = await svc.reject(id, decidedByUserId, req.body.decisionNote);
 
     if (applied) {
+      if (approval.sourcePluginId && options.pluginWorkerManager) {
+        const worker = options.pluginWorkerManager.getWorker(approval.sourcePluginId);
+        if (worker) {
+          worker.notify("approvals.resolved", {
+            approvalId: approval.id,
+            status: "rejected",
+            decisionNote: approval.decisionNote ?? null,
+            decidedByUserId: approval.decidedByUserId ?? null,
+            decidedAt: approval.decidedAt?.toISOString() ?? new Date().toISOString(),
+          });
+        }
+      }
+
       await logActivity(db, {
         companyId: approval.companyId,
         actorType: "user",
