@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Db } from "@paperclipai/db";
-import type { BindMode, DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
+import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
@@ -126,7 +126,6 @@ export async function createApp(
     deploymentExposure: DeploymentExposure;
     allowedHostnames: string[];
     bindHost: string;
-    bind: BindMode;
     authPublicBaseUrl?: string | undefined;
     authReady: boolean;
     companyDeletionEnabled: boolean;
@@ -273,7 +272,7 @@ export async function createApp(
           host: {
             getReachableUrl: ({ pathname }: { pathname: string }) =>
               Promise.resolve(resolveReachableUrl({
-                bind: opts.bind,
+                bindHost: opts.bindHost,
                 deploymentMode: opts.deploymentMode,
                 deploymentExposure: opts.deploymentExposure,
                 authPublicBaseUrl: opts.authPublicBaseUrl,

@@ -482,6 +482,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
     manifest,
     host: {
       async getReachableUrl(params) {
+        requireCapability(manifest, capabilitySet, "host.urls.discover");
         if (options.host?.getReachableUrl) return options.host.getReachableUrl(params);
         return { url: null, reason: "loopback_bind" };
       },

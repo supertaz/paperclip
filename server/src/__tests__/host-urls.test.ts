@@ -7,7 +7,7 @@ import {
 
 function input(overrides: Partial<ReachableUrlInput> = {}): ReachableUrlInput {
   return {
-    bind: "lan",
+    bindHost: "0.0.0.0",
     deploymentMode: "authenticated",
     deploymentExposure: "public",
     authPublicBaseUrl: "https://example.com",
@@ -18,10 +18,29 @@ function input(overrides: Partial<ReachableUrlInput> = {}): ReachableUrlInput {
 
 describe("resolveReachableUrl", () => {
   describe("loopback bind", () => {
-    it("returns loopback_bind for bind=loopback regardless of other config", () => {
+    it("returns loopback_bind for bindHost=127.0.0.1 regardless of other config", () => {
       const result = resolveReachableUrl(input({
-        bind: "loopback",
+        bindHost: "127.0.0.1",
         deploymentMode: "authenticated",
+        deploymentExposure: "public",
+        authPublicBaseUrl: "https://example.com",
+      }));
+      expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.loopbackBind });
+    });
+
+    it("returns loopback_bind for bindHost=localhost", () => {
+      const result = resolveReachableUrl(input({ bindHost: "localhost" }));
+      expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.loopbackBind });
+    });
+
+    it("returns loopback_bind for bindHost=::1 (IPv6 loopback)", () => {
+      const result = resolveReachableUrl(input({ bindHost: "::1" }));
+      expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.loopbackBind });
+    });
+
+    it("returns loopback_bind even when bind=custom with loopback customBindHost", () => {
+      const result = resolveReachableUrl(input({
+        bindHost: "127.0.0.1",
         deploymentExposure: "public",
         authPublicBaseUrl: "https://example.com",
       }));
@@ -30,18 +49,18 @@ describe("resolveReachableUrl", () => {
   });
 
   describe("private exposure", () => {
-    it("returns private_exposure for non-loopback lan bind with private exposure", () => {
+    it("returns private_exposure for non-loopback host with private exposure", () => {
       const result = resolveReachableUrl(input({ deploymentExposure: "private" }));
       expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.privateExposure });
     });
 
-    it("returns private_exposure for tailnet bind with private exposure", () => {
-      const result = resolveReachableUrl(input({ bind: "tailnet", deploymentExposure: "private" }));
+    it("returns private_exposure for tailnet bindHost with private exposure", () => {
+      const result = resolveReachableUrl(input({ bindHost: "100.64.0.1", deploymentExposure: "private" }));
       expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.privateExposure });
     });
 
-    it("returns private_exposure for custom bind with private exposure", () => {
-      const result = resolveReachableUrl(input({ bind: "custom", deploymentExposure: "private" }));
+    it("returns private_exposure for custom bindHost with private exposure", () => {
+      const result = resolveReachableUrl(input({ bindHost: "10.0.0.1", deploymentExposure: "private" }));
       expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.privateExposure });
     });
   });
@@ -59,18 +78,18 @@ describe("resolveReachableUrl", () => {
   });
 
   describe("successful URL construction", () => {
-    it("constructs canonical URL for lan bind", () => {
-      const result = resolveReachableUrl(input({ bind: "lan" }));
+    it("constructs canonical URL for all-interfaces (lan) bindHost", () => {
+      const result = resolveReachableUrl(input({ bindHost: "0.0.0.0" }));
       expect(result).toEqual({ url: "https://example.com/api/webhooks/gitea" });
     });
 
-    it("constructs canonical URL for tailnet bind", () => {
-      const result = resolveReachableUrl(input({ bind: "tailnet" }));
+    it("constructs canonical URL for tailnet bindHost", () => {
+      const result = resolveReachableUrl(input({ bindHost: "100.64.0.1" }));
       expect(result).toEqual({ url: "https://example.com/api/webhooks/gitea" });
     });
 
-    it("constructs canonical URL for custom bind", () => {
-      const result = resolveReachableUrl(input({ bind: "custom" }));
+    it("constructs canonical URL for custom non-loopback bindHost", () => {
+      const result = resolveReachableUrl(input({ bindHost: "192.168.1.100" }));
       expect(result).toEqual({ url: "https://example.com/api/webhooks/gitea" });
     });
 
@@ -200,7 +219,7 @@ describe("resolveReachableUrl", () => {
     });
 
     it("url=null and reason=string when not reachable", () => {
-      const result = resolveReachableUrl(input({ bind: "loopback" }));
+      const result = resolveReachableUrl(input({ bindHost: "127.0.0.1" }));
       expect(result.url).toBeNull();
       expect(typeof result.reason).toBe("string");
     });

@@ -1,7 +1,9 @@
-import type { BindMode, DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
+import { isLoopbackHost } from "@paperclipai/shared";
+import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 
 export interface ReachableUrlInput {
-  bind: BindMode;
+  /** Resolved bind host string (e.g. "127.0.0.1", "0.0.0.0"). Used instead of BindMode to correctly handle bind=custom with a loopback customBindHost. */
+  bindHost: string;
   deploymentMode: DeploymentMode;
   deploymentExposure: DeploymentExposure;
   authPublicBaseUrl: string | undefined;
@@ -39,7 +41,7 @@ export function resolveReachableUrl(input: ReachableUrlInput): ReachableUrlResul
     return { url: null, reason: REACHABLE_URL_REASON.invalidPathname };
   }
 
-  if (input.bind === "loopback") {
+  if (isLoopbackHost(input.bindHost)) {
     return { url: null, reason: REACHABLE_URL_REASON.loopbackBind };
   }
 
