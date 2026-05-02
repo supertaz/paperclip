@@ -1797,10 +1797,11 @@ export function createPluginGateVetoTracker(options: {
   return {
     track(companyId: string, vetoPluginId: string) {
       const now = Date.now();
-      let entry = map.get(companyId);
+      const key = `${companyId}:${vetoPluginId}`;
+      let entry = map.get(key);
       if (!entry || now - entry.windowStart >= windowMs) {
         entry = { windowStart: now, count: 0, warned: false };
-        map.set(companyId, entry);
+        map.set(key, entry);
       }
       entry.count++;
       if (entry.count > threshold && !entry.warned) {
@@ -2232,7 +2233,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     onWarn(companyId, vetoPluginId, count) {
       logger.warn(
         { companyId, vetoPluginId, count, windowMs: 60_000 },
-        "plugin-gate veto rate exceeded threshold: >20 run cancellations in 60 s for company",
+        "plugin-gate veto rate exceeded threshold: >20 cancellations by this plugin in 60 s for company",
       );
     },
   });
@@ -4122,7 +4123,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           `,
         })
         .from(plugins)
-        .where(eq(plugins.status, "ready"));
+        .where(
+          and(
+            eq(plugins.status, "ready"),
+            sql`${plugins.manifestJson} @> '{"capabilities":["run.gate"]}'`,
+          ),
+        );
 
       const gatePluginRows: RunGatePluginRow[] = gateRows.map((row) => ({
         id: row.id,
@@ -4152,7 +4158,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           agentId: run.agentId,
           issueId: issueId ?? null,
           companyId: run.companyId,
-          invocationSource: run.invocationSource,
+          invocationSource: run.invocationSource ?? "",
         });
 
         if (gateResult.veto) {

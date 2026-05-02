@@ -96,4 +96,17 @@ describe("createPluginGateVetoTracker", () => {
     expect(calls.some((c) => c[0] === "co-1")).toBe(true);
     expect(calls.some((c) => c[0] === "co-2")).toBe(true);
   });
+
+  it("tracks different plugins within the same company independently (per-plugin keying)", () => {
+    const onWarn = vi.fn();
+    const tracker = createPluginGateVetoTracker({ threshold: 2, windowMs: 60_000, onWarn });
+    // plugin-a vetoes 4 times — triggers warning for plugin-a
+    for (let i = 0; i < 4; i++) tracker.track("co-1", "plugin-a");
+    // plugin-b vetoes 2 times — should NOT trigger warning (below threshold)
+    tracker.track("co-1", "plugin-b");
+    tracker.track("co-1", "plugin-b");
+    // Only plugin-a breached, not plugin-b
+    expect(onWarn).toHaveBeenCalledOnce();
+    expect(onWarn).toHaveBeenCalledWith("co-1", "plugin-a", expect.any(Number));
+  });
 });
