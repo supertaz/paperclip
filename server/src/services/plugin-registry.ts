@@ -527,7 +527,7 @@ export function pluginRegistryService(db: Db) {
     ): Promise<PluginEntityRecord[]> => {
       const consumer = await getById(consumerPluginId);
       const provider = await getByKey(params.providerPluginKey);
-      if (!consumer || !provider) {
+      if (!consumer || !provider || provider.status === "uninstalled") {
         throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
       }
 
@@ -556,7 +556,9 @@ export function pluginRegistryService(db: Db) {
         throw Object.assign(new Error("PluginPeerReadDenied"), { code: "PluginPeerReadDenied" });
       }
 
-      const effectiveLimit = Math.min(params.limit ?? PEER_ENTITY_MAX_LIMIT, PEER_ENTITY_MAX_LIMIT);
+      const rawLimit = Number.isFinite(params.limit) && (params.limit ?? 0) > 0 ? params.limit! : PEER_ENTITY_MAX_LIMIT;
+      const effectiveLimit = Math.min(rawLimit, PEER_ENTITY_MAX_LIMIT);
+      const rawOffset = Number.isFinite(params.offset) && (params.offset ?? 0) >= 0 ? params.offset! : 0;
       const conditions = [
         eq(pluginEntities.pluginId, provider.id),
         eq(pluginEntities.entityType, params.entityType),
@@ -571,7 +573,7 @@ export function pluginRegistryService(db: Db) {
         .where(and(...conditions))
         .orderBy(asc(pluginEntities.createdAt))
         .limit(effectiveLimit)
-        .offset(params.offset ?? 0) as unknown as Promise<PluginEntityRecord[]>;
+        .offset(rawOffset) as unknown as Promise<PluginEntityRecord[]>;
     },
 
     /**
@@ -596,7 +598,7 @@ export function pluginRegistryService(db: Db) {
     ): Promise<PluginEntityRecord | null> => {
       const consumer = await getById(consumerPluginId);
       const provider = await getByKey(params.providerPluginKey);
-      if (!consumer || !provider) return null;
+      if (!consumer || !provider || provider.status === "uninstalled") return null;
 
       // Verify provider is enabled for this company.
       // No settings row means the plugin is enabled by default (plugin_company_settings contract).

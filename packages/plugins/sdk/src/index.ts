@@ -296,6 +296,8 @@ export type {
   PluginApiRouteMethod,
   PluginEventType,
   PluginBridgeErrorCode,
+  PluginPeerReadsDeclaration,
+  PluginPeerReadEntityDeclaration,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------

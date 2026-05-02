@@ -79,6 +79,8 @@ export type {
   PluginApiRouteMethod,
   PluginEventType,
   PluginBridgeErrorCode,
+  PluginPeerReadsDeclaration,
+  PluginPeerReadEntityDeclaration,
   Company,
   Project,
   Issue,
