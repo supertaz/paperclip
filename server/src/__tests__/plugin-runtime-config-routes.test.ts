@@ -14,6 +14,8 @@ const mockRuntimeConfig = vi.hoisted(() => ({
   clearRuntime: vi.fn(),
 }));
 
+const mockLogActivity = vi.hoisted(() => vi.fn());
+
 vi.mock("../services/plugin-registry.js", () => ({
   pluginRegistryService: () => mockRegistry,
 }));
@@ -32,7 +34,7 @@ vi.mock("../services/plugin-loader.js", () => ({
 }));
 
 vi.mock("../services/activity-log.js", () => ({
-  logActivity: vi.fn(),
+  logActivity: mockLogActivity,
 }));
 
 vi.mock("../services/live-events.js", () => ({
@@ -154,5 +156,52 @@ describe.sequential("DELETE /api/plugins/:pluginId/runtime-config", () => {
     const app = await createApp({ type: "none" });
     const res = await request(app).delete(`/api/plugins/${pluginId}/runtime-config`);
     expect(res.status).toBe(403);
+  });
+
+  it("logs audit activity with actorType 'user' and action 'plugin.runtime-config.cleared' on success", async () => {
+    readyPlugin();
+    mockRuntimeConfig.clearRuntime.mockResolvedValue(undefined);
+    mockLogActivity.mockResolvedValue(undefined);
+
+    const app = await createApp(boardActor({ isInstanceAdmin: true, userId: "admin-user-1" }));
+    const res = await request(app).delete(`/api/plugins/${pluginId}/runtime-config`);
+
+    expect(res.status).toBe(204);
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actorType: "user",
+        actorId: "admin-user-1",
+        action: "plugin.runtime-config.cleared",
+        entityType: "plugin",
+        entityId: pluginId,
+      }),
+    );
+  });
+
+  it("audit log for clear does not contain raw config values", async () => {
+    readyPlugin();
+    mockRuntimeConfig.clearRuntime.mockResolvedValue(undefined);
+    mockLogActivity.mockResolvedValue(undefined);
+
+    const app = await createApp(boardActor({ isInstanceAdmin: true }));
+    await request(app).delete(`/api/plugins/${pluginId}/runtime-config`);
+
+    for (const call of mockLogActivity.mock.calls) {
+      const details = call[1]?.details ?? {};
+      expect(JSON.stringify(details)).not.toMatch(/password|secret|token|api_key/i);
+      // No raw values object — only metadata (pluginId, pluginKey)
+      expect(details).not.toHaveProperty("values");
+      expect(details).not.toHaveProperty("configJson");
+    }
+  });
+
+  it("does not call logActivity when plugin not found (404)", async () => {
+    mockRegistry.getById.mockResolvedValue(null);
+    const app = await createApp(boardActor({ isInstanceAdmin: true }));
+
+    await request(app).delete(`/api/plugins/${pluginId}/runtime-config`);
+
+    expect(mockLogActivity).not.toHaveBeenCalled();
   });
 });
