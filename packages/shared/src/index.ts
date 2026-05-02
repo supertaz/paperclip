@@ -519,6 +519,9 @@ export type {
   PluginWebhookDeliveryRecord,
   QuotaWindow,
   ProviderQuotaResult,
+  IssueCustomFieldType,
+  IssueCustomFieldEnumValue,
+  IssueCustomFieldDeclaration,
 } from "./types/index.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,

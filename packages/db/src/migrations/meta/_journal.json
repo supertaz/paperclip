@@ -554,6 +554,13 @@
       "when": 1746182400000,
       "tag": "0078_plugin_config_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1777714971078,
+      "tag": "0079_issue_custom_fields",
+      "breakpoints": true
     }
   ]
 }
