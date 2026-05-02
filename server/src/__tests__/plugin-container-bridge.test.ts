@@ -73,6 +73,31 @@ describe("plugin container bridge — buildHostServices wiring", () => {
     await expect(handlers["containers.start"]({ image: "alpine:latest" })).rejects.toThrow(/capability/i);
   });
 
+  it("containers.start passes pluginId (UUID) not pluginKey (manifest key) to ContainerService", async () => {
+    const containerService = createContainerService({ driver: makeFakeDriver() });
+    const startSpy = vi.spyOn(containerService, "start");
+
+    const services = buildHostServices(
+      {} as never,
+      "plugin-record-uuid-1234",
+      "test.plugin",
+      createEventBusStub(),
+      undefined,
+      { containerService },
+    );
+
+    const handlers = createHostClientHandlers({
+      pluginId: "test.plugin",
+      capabilities: ["containers.manage"],
+      services,
+    });
+
+    await handlers["containers.start"]({ image: "alpine:latest" });
+    // First arg to ContainerService.start must be the pluginId (UUID), not the pluginKey
+    expect(startSpy.mock.calls[0][0]).toBe("plugin-record-uuid-1234");
+    expect(startSpy.mock.calls[0][0]).not.toBe("test.plugin");
+  });
+
   it("containers.list returns empty array via service", async () => {
     const containerService = createContainerService({ driver: makeFakeDriver() });
     const services = buildHostServices(

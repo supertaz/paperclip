@@ -192,6 +192,16 @@ describe("createDockerDriver — list label value parsing", () => {
   });
 });
 
+describe("createDockerDriver — exec env-key validation", () => {
+  it("rejects env keys containing = in exec() just as start() does", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await expect(
+      driver.exec("engine-id-1", ["env"], { env: { "BAD=KEY": "val" } })
+    ).rejects.toThrow(/invalid env key/i);
+  });
+});
+
 describe("createDockerDriver — probe endpoint helper", () => {
   it("probe returns ok:true when docker info succeeds", async () => {
     const runner = vi.fn().mockResolvedValue({ stdout: '{"ServerVersion":"24.0.0"}', stderr: "", exitCode: 0 });
