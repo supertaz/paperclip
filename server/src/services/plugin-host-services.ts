@@ -21,7 +21,7 @@ import type {
   PluginIssueAssigneeSummary,
   PluginIssueOrchestrationSummary,
 } from "@paperclipai/plugin-sdk";
-import type { CreateIssueThreadInteraction, IssueDocumentSummary } from "@paperclipai/shared";
+import type { CreateIssueThreadInteraction, IssueDocumentSummary, IssueCustomFieldType } from "@paperclipai/shared";
 import { companyService } from "./companies.js";
 import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
@@ -526,6 +526,7 @@ export function buildHostServices(
     if (!caps.includes(capability)) {
       throw new Error(`Plugin '${pluginKey}' does not have required capability '${capability}'`);
     }
+    return pluginRow;
   };
 
   const inCompany = <T extends { companyId: string | null | undefined }>(
@@ -1609,8 +1610,7 @@ export function buildHostServices(
       async set(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        await ensurePluginCapability("issue.custom-fields.write");
-        const pluginRow = await registry.getById(pluginId);
+        const pluginRow = await ensurePluginCapability("issue.custom-fields.write");
         const manifest = pluginRow?.manifestJson as { customFields?: Array<{ key: string; label: string; type: string; enumValues?: Array<{ id: string; label: string }> }> } | null;
         const fieldDecl = manifest?.customFields?.find((f) => f.key === params.key);
         if (!fieldDecl) {
@@ -1630,7 +1630,7 @@ export function buildHostServices(
           pluginId,
           key: params.key,
           value: params.value,
-          fieldType: fieldDecl.type as any,
+          fieldType: fieldDecl.type as IssueCustomFieldType,
           fieldLabel: fieldDecl.label,
         });
         await logPluginActivity({
@@ -1664,14 +1664,13 @@ export function buildHostServices(
       async listForIssue(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        await ensurePluginCapability("issue.custom-fields.read");
+        const pluginRow = await ensurePluginCapability("issue.custom-fields.read");
         const fields = await issueCustomFields.listForIssue({
           companyId,
           issueId: params.issueId,
           pluginId,
         });
-        const pluginRow3 = await registry.getById(pluginId);
-        const displayName = (pluginRow3?.manifestJson as { displayName?: string })?.displayName ?? pluginKey;
+        const displayName = (pluginRow?.manifestJson as { displayName?: string })?.displayName ?? pluginKey;
         return fields.map((f) => ({ ...f, pluginKey, pluginDisplayName: displayName }));
       },
     },
