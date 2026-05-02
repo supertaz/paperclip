@@ -46,7 +46,11 @@ function registerModuleMocks() {
 
 type ActorType = "board" | "agent" | "none";
 
-async function createApp(actorType: ActorType, companyIds = ["company-1"]) {
+async function createApp(
+  actorType: ActorType,
+  companyIds = ["company-1"],
+  pluginWorkerManager?: { getWorker: (id: string) => { notify: ReturnType<typeof vi.fn> } | null },
+) {
   const [{ errorHandler }, { approvalRoutes }] = await Promise.all([
     import("../middleware/index.js"),
     import("../routes/approvals.js"),
@@ -75,7 +79,7 @@ async function createApp(actorType: ActorType, companyIds = ["company-1"]) {
     }
     next();
   });
-  app.use("/api", approvalRoutes({} as any));
+  app.use("/api", approvalRoutes({} as any, pluginWorkerManager ? { pluginWorkerManager } as any : {}));
   app.use(errorHandler);
   return app;
 }
@@ -224,5 +228,85 @@ describe("WF-1 RBAC: approve / reject require board actor", () => {
 
     expect(res.status).toBe(403);
     expect(mockApprovalService.reject).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Plugin worker notification on approve/reject (fire-and-forget)
+  // -------------------------------------------------------------------------
+
+  it("approve: notifies the plugin worker when sourcePluginId is set and worker exists", async () => {
+    const notifyMock = vi.fn();
+    const mockWorker = { notify: notifyMock };
+    const mockWorkerManager = {
+      getWorker: vi.fn(() => mockWorker),
+    };
+
+    mockApprovalService.approve.mockResolvedValue({
+      approval: {
+        ...pluginApproval,
+        status: "approved",
+        decidedByUserId: "user-board",
+        decidedAt: new Date("2026-05-01T12:00:00.000Z"),
+        decisionNote: "approved",
+      },
+      applied: true,
+    });
+
+    const res = await request(await createApp("board", ["company-1"], mockWorkerManager as any))
+      .post("/api/approvals/approval-pw-1/approve")
+      .send({ decisionNote: "approved" });
+
+    expect(res.status).toBe(200);
+    expect(mockWorkerManager.getWorker).toHaveBeenCalledWith("plugin-1");
+    expect(notifyMock).toHaveBeenCalledWith(
+      "approvals.resolved",
+      expect.objectContaining({ approvalId: "approval-pw-1", status: "approved" }),
+    );
+  });
+
+  it("reject: notifies the plugin worker when sourcePluginId is set and worker exists", async () => {
+    const notifyMock = vi.fn();
+    const mockWorker = { notify: notifyMock };
+    const mockWorkerManager = {
+      getWorker: vi.fn(() => mockWorker),
+    };
+
+    mockApprovalService.reject.mockResolvedValue({
+      approval: {
+        ...pluginApproval,
+        status: "rejected",
+        decidedByUserId: "user-board",
+        decidedAt: new Date("2026-05-01T12:00:00.000Z"),
+        decisionNote: "not now",
+      },
+      applied: true,
+    });
+
+    const res = await request(await createApp("board", ["company-1"], mockWorkerManager as any))
+      .post("/api/approvals/approval-pw-1/reject")
+      .send({ decisionNote: "not now" });
+
+    expect(res.status).toBe(200);
+    expect(mockWorkerManager.getWorker).toHaveBeenCalledWith("plugin-1");
+    expect(notifyMock).toHaveBeenCalledWith(
+      "approvals.resolved",
+      expect.objectContaining({ approvalId: "approval-pw-1", status: "rejected" }),
+    );
+  });
+
+  it("approve: skips notification when worker is not running", async () => {
+    const mockWorkerManager = { getWorker: vi.fn(() => null) };
+
+    mockApprovalService.approve.mockResolvedValue({
+      approval: { ...pluginApproval, status: "approved", decidedByUserId: "user-board" },
+      applied: true,
+    });
+
+    const res = await request(await createApp("board", ["company-1"], mockWorkerManager as any))
+      .post("/api/approvals/approval-pw-1/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockWorkerManager.getWorker).toHaveBeenCalledWith("plugin-1");
   });
 });
