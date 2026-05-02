@@ -24,6 +24,7 @@ describe("createDockerDriver — basic configuration", () => {
     });
     expect(runner).toHaveBeenCalledWith(
       expect.arrayContaining(["run", "-d"]),
+      expect.any(Object),
     );
   });
 
