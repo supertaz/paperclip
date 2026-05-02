@@ -54,6 +54,14 @@ vi.mock("../services/secrets.js", () => ({
   }),
 }));
 
+const mockGetCompanyById = vi.hoisted(() => vi.fn().mockResolvedValue({ id: "co-1", name: "Test Company" }));
+
+vi.mock("../services/companies.js", () => ({
+  companyService: () => ({
+    getById: (...args: unknown[]) => mockGetCompanyById(...args),
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -182,6 +190,7 @@ describe("createPluginSecretsHandler.write()", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
     handler = createPluginSecretsHandler({
       db: makeFakeDb(),
       pluginId: PLUGIN_ID,
@@ -324,6 +333,7 @@ describe("createPluginSecretsHandler.delete()", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
     handler = createPluginSecretsHandler({ db: makeFakeDb(), pluginId: PLUGIN_ID });
     mockGetByName.mockResolvedValue(null);
     mockRemove.mockResolvedValue(BASE_SECRET);
@@ -357,6 +367,67 @@ describe("createPluginSecretsHandler.delete()", () => {
     mockGetByName.mockResolvedValue(null);
     await expect(handler.delete({ companyId: COMPANY_ID, name: "NONEXISTENT" })).resolves.toBeUndefined();
     expect(mockRemove).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Adversarial-fix coverage
+// ---------------------------------------------------------------------------
+
+describe("write() adversarial fixes", () => {
+  let handler: PluginSecretsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
+    mockGetByName.mockResolvedValue(null);
+    mockCreate.mockResolvedValue({ id: SECRET_ID, name: "MY_SECRET" });
+    handler = createPluginSecretsHandler({ db: makeFakeDb(), pluginId: PLUGIN_ID });
+  });
+
+  it("rejects writes to a non-existent company", async () => {
+    mockGetCompanyById.mockResolvedValueOnce(null);
+    await expect(
+      handler.write({ companyId: "nonexistent-co", name: "TOKEN", value: "val" }),
+    ).rejects.toThrow(/Company not found/);
+  });
+
+  it("audit log is awaited — mockLogActivity rejection propagates", async () => {
+    mockLogActivity.mockRejectedValueOnce(new Error("audit DB down"));
+    await expect(
+      handler.write({ companyId: COMPANY_ID, name: "MY_SECRET", value: "val" }),
+    ).rejects.toThrow("audit DB down");
+  });
+});
+
+describe("delete() adversarial fixes", () => {
+  let handler: PluginSecretsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCompanyById.mockResolvedValue({ id: "co-1", name: "Test Company" });
+    mockGetByName.mockResolvedValue(BASE_SECRET);
+    mockRemove.mockResolvedValue(undefined);
+    handler = createPluginSecretsHandler({ db: makeFakeDb(), pluginId: PLUGIN_ID });
+  });
+
+  it("rejects invalid secret name (empty)", async () => {
+    await expect(
+      handler.delete({ companyId: COMPANY_ID, name: "" }),
+    ).rejects.toThrow(/empty/);
+  });
+
+  it("rejects invalid secret name (bad characters)", async () => {
+    await expect(
+      handler.delete({ companyId: COMPANY_ID, name: "has spaces!" }),
+    ).rejects.toThrow(/alphanumeric/);
+  });
+
+  it("rejects deletes for a non-existent company", async () => {
+    mockGetCompanyById.mockResolvedValueOnce(null);
+    await expect(
+      handler.delete({ companyId: "nonexistent-co", name: "TOKEN" }),
+    ).rejects.toThrow(/Company not found/);
   });
 });
 

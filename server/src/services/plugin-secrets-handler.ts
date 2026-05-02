@@ -40,6 +40,7 @@ import { SECRET_PROVIDERS, type SecretProvider } from "@paperclipai/shared";
 import { getSecretProvider } from "../secrets/provider-registry.js";
 import { pluginRegistryService } from "./plugin-registry.js";
 import { secretService } from "./secrets.js";
+import { companyService } from "./companies.js";
 import { logActivity } from "./activity-log.js";
 import {
   collectSecretRefPaths,
@@ -236,8 +237,10 @@ export function createPluginSecretsHandler(
   const { db, pluginId } = options;
   const registry = pluginRegistryService(db);
 
-  // Rate limit: max 30 resolution attempts per plugin per minute
+  // Rate limit: max 30 resolve attempts per plugin per minute
   const rateLimiter = createRateLimiter(30, 60_000);
+  // Rate limit: max 20 write/delete operations per plugin per minute
+  const writeLimiter = createRateLimiter(20, 60_000);
 
   let cachedAllowedRefs: Set<string> | null = null;
   let cachedAllowedRefsExpiry = 0;
@@ -342,6 +345,15 @@ export function createPluginSecretsHandler(
       const pluginActorId = `plugin:${pluginId}`;
 
       // ---------------------------------------------------------------
+      // 0. Rate limiting — prevent storage/cost DoS
+      // ---------------------------------------------------------------
+      if (!writeLimiter.check(pluginId)) {
+        const err = new Error("Rate limit exceeded for secret write operations");
+        err.name = "RateLimitExceededError";
+        throw err;
+      }
+
+      // ---------------------------------------------------------------
       // 1. Input validation
       // ---------------------------------------------------------------
       if (!name || name.trim().length === 0) {
@@ -368,7 +380,15 @@ export function createPluginSecretsHandler(
       }
 
       // ---------------------------------------------------------------
-      // 2. Resolve default provider from environment
+      // 2. Company existence check — prevent cross-company writes
+      // ---------------------------------------------------------------
+      const company = await companyService(db).getById(companyId);
+      if (!company) {
+        throw new Error(`Company not found: ${companyId}`);
+      }
+
+      // ---------------------------------------------------------------
+      // 3. Resolve default provider from environment
       // ---------------------------------------------------------------
       const configuredDefaultProvider = process.env.PAPERCLIP_SECRETS_PROVIDER;
       const defaultProvider = (
@@ -378,7 +398,7 @@ export function createPluginSecretsHandler(
       ) as SecretProvider;
 
       // ---------------------------------------------------------------
-      // 3. Ownership check — create or rotate
+      // 4. Ownership check — create or rotate
       // ---------------------------------------------------------------
       const svc = secretService(db);
       const existing = await svc.getByName(companyId, name);
@@ -392,7 +412,7 @@ export function createPluginSecretsHandler(
           { value, externalRef: existing.externalRef },
           { userId: pluginActorId, agentId: null },
         );
-        logActivity(db, {
+        await logActivity(db, {
           companyId,
           actorType: "plugin",
           actorId: pluginActorId,
@@ -400,7 +420,7 @@ export function createPluginSecretsHandler(
           entityType: "secret",
           entityId: rotated.id,
           details: { name },
-        }).catch(() => {});
+        });
         return rotated.id;
       }
 
@@ -409,7 +429,7 @@ export function createPluginSecretsHandler(
         { name, provider: defaultProvider, value, description },
         { userId: pluginActorId, agentId: null },
       );
-      logActivity(db, {
+      await logActivity(db, {
         companyId,
         actorType: "plugin",
         actorId: pluginActorId,
@@ -417,13 +437,44 @@ export function createPluginSecretsHandler(
         entityType: "secret",
         entityId: created.id,
         details: { name },
-      }).catch(() => {});
+      });
       return created.id;
     },
 
     async delete(params: { companyId: string; name: string }): Promise<undefined> {
       const { companyId, name } = params;
       const pluginActorId = `plugin:${pluginId}`;
+
+      // ---------------------------------------------------------------
+      // 0. Rate limiting
+      // ---------------------------------------------------------------
+      if (!writeLimiter.check(pluginId)) {
+        const err = new Error("Rate limit exceeded for secret write operations");
+        err.name = "RateLimitExceededError";
+        throw err;
+      }
+
+      // ---------------------------------------------------------------
+      // 1. Input validation (mirrors write path)
+      // ---------------------------------------------------------------
+      if (!name || name.trim().length === 0) {
+        throw new Error("Secret name must not be empty.");
+      }
+      if (name.length > 255) {
+        throw new Error("Secret name must not exceed 255 characters.");
+      }
+      if (!SECRET_NAME_RE.test(name)) {
+        throw new Error("Secret name must only contain alphanumeric characters, underscores, and dashes.");
+      }
+
+      // ---------------------------------------------------------------
+      // 2. Company existence check
+      // ---------------------------------------------------------------
+      const company = await companyService(db).getById(companyId);
+      if (!company) {
+        throw new Error(`Company not found: ${companyId}`);
+      }
+
       const svc = secretService(db);
       const existing = await svc.getByName(companyId, name);
 
@@ -434,7 +485,7 @@ export function createPluginSecretsHandler(
       }
 
       await svc.remove(existing.id);
-      logActivity(db, {
+      await logActivity(db, {
         companyId,
         actorType: "plugin",
         actorId: pluginActorId,
@@ -442,7 +493,7 @@ export function createPluginSecretsHandler(
         entityType: "secret",
         entityId: existing.id,
         details: { name },
-      }).catch(() => {});
+      });
       return undefined;
     },
   };
