@@ -113,12 +113,22 @@ describe("PluginCgroupManager — unit tests (mocked fs)", () => {
     it("does not write limit files when limits are empty", async () => {
       const { writeFile } = await import("node:fs/promises");
       await manager.setup(PLUGIN_ID, {});
-      // writeFile is called for subtree_control on intermediate dirs, but not for any limit file
+      // writeFile is called for cgroup.kill and subtree_control on intermediate dirs, but not for any limit file
       const limitFiles = ["pids.max", "memory.high", "memory.max", "cpu.weight"];
       const calls = vi.mocked(writeFile).mock.calls;
       for (const [filePath] of calls) {
         expect(limitFiles.some((f) => String(filePath).endsWith(f))).toBe(false);
       }
+    });
+
+    it("writes cgroup.kill to leaf before limit files to evict stale tasks from prior crash", async () => {
+      const { writeFile } = await import("node:fs/promises");
+      await manager.setup(PLUGIN_ID, { pidsMax: 64 });
+      const calls = vi.mocked(writeFile).mock.calls;
+      const killIdx = calls.findIndex(([p]) => String(p).endsWith("cgroup.kill"));
+      const pidsIdx = calls.findIndex(([p]) => String(p).endsWith("pids.max"));
+      expect(killIdx).toBeGreaterThanOrEqual(0);
+      expect(pidsIdx).toBeGreaterThan(killIdx);
     });
 
     it("rejects path traversal in pluginId", async () => {
@@ -131,11 +141,13 @@ describe("PluginCgroupManager — unit tests (mocked fs)", () => {
 
     it("rmdirs the leaf cgroup if a limit write fails partway through", async () => {
       const { writeFile, rmdir } = await import("node:fs/promises");
-      // First N calls (subtree_control writes) succeed; the first limit write fails
+      // cgroup.kill and subtree_control writes succeed; the first limit file write fails
       let limitWriteAttempted = false;
       vi.mocked(writeFile).mockImplementation((...args: Parameters<typeof writeFile>) => {
         const filePath = String(args[0]);
-        if (filePath.endsWith("cgroup.subtree_control")) return Promise.resolve(undefined as void);
+        if (filePath.endsWith("cgroup.kill") || filePath.endsWith("cgroup.subtree_control")) {
+          return Promise.resolve(undefined as void);
+        }
         if (!limitWriteAttempted) {
           limitWriteAttempted = true;
           return Promise.reject(new Error("write failed")) as unknown as Promise<void>;

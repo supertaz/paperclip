@@ -69,6 +69,15 @@ export function createPluginCgroupManager(
     const cgroupDir = buildPluginCgroupPath(cgroupRoot, pluginId);
     // Create the full path including intermediate dirs
     await mkdir(cgroupDir, { recursive: true });
+    // Kill any processes left over from a previous crashed instance. The cgroup
+    // dir may already exist (mkdir is idempotent) but still have stale tasks in
+    // cgroup.procs from a prior worker that crashed before teardown ran. Writing
+    // cgroup.kill evicts them so the new worker enters a clean leaf.
+    await writeFile(path.join(cgroupDir, "cgroup.kill"), "1", "utf8").catch(
+      (err: NodeJS.ErrnoException) => {
+        if (err.code !== "ENOENT" && err.code !== "EINVAL") throw err;
+      },
+    );
     // Enable controllers at each intermediate level so the leaf can use them.
     // These writes are idempotent — re-enabling an already-enabled controller is a no-op.
     const intermediates = [

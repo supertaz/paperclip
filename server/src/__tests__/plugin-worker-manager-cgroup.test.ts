@@ -1,3 +1,11 @@
+/**
+ * Cgroup-specific unit tests for createPluginWorkerHandle.
+ *
+ * Coverage note: the generation-counter skip path (cgroupGeneration !== teardownGeneration)
+ * in handleProcessExit requires a real child process exit to trigger. That path is
+ * exercised by Tier 2 integration tests; the unit-level coverage here validates initial
+ * state and the cgroupEnforced/cgroupError diagnostics surface only.
+ */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { PluginCgroupManager } from "../services/plugin-cgroup-manager.js";
 
