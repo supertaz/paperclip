@@ -151,6 +151,47 @@ describe("createDockerDriver — networkMode and allowRootUser", () => {
   });
 });
 
+describe("createDockerDriver — exec env forwarding", () => {
+  it("forwards env vars as -e flags to docker exec", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await driver.exec("engine-id-1", ["env"], { env: { MY_VAR: "hello", OTHER: "world" } });
+    const args = runner.mock.calls[0][0] as string[];
+    expect(args[0]).toBe("exec");
+    expect(args).toContain("-e");
+    // Both env vars should appear as -e KEY=VAL pairs
+    const pairs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(pairs).toContain("MY_VAR=hello");
+    expect(pairs).toContain("OTHER=world");
+  });
+
+  it("emits no -e flags when env is absent", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await driver.exec("engine-id-1", ["ls"]);
+    const args = runner.mock.calls[0][0] as string[];
+    expect(args).not.toContain("-e");
+  });
+});
+
+describe("createDockerDriver — list label value parsing", () => {
+  it("preserves label values containing = signs", async () => {
+    const labelString = "build-arg=cmake=-DFOO=1,paperclip.plugin-id=test-plugin";
+    const psLine = JSON.stringify({
+      ID: "abc123",
+      Image: "alpine:latest",
+      State: "running",
+      CreatedAt: "2026-01-01T00:00:00Z",
+      Labels: labelString,
+    });
+    const runner = vi.fn().mockResolvedValue({ stdout: psLine, stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    const containers = await driver.list();
+    expect(containers[0].labels["build-arg"]).toBe("cmake=-DFOO=1");
+    expect(containers[0].labels["paperclip.plugin-id"]).toBe("test-plugin");
+  });
+});
+
 describe("createDockerDriver — probe endpoint helper", () => {
   it("probe returns ok:true when docker info succeeds", async () => {
     const runner = vi.fn().mockResolvedValue({ stdout: '{"ServerVersion":"24.0.0"}', stderr: "", exitCode: 0 });
