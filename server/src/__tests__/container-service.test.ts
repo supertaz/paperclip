@@ -147,6 +147,17 @@ describe("ContainerService — resource limit enforcement", () => {
   });
 });
 
+describe("ContainerService — non-positive maxLifetimeSec is clamped", () => {
+  it("treats maxLifetimeSec=0 as the service default and still applies timer", async () => {
+    const driver = makeFakeDriver();
+    const killSpy = vi.spyOn(driver, "kill");
+    const service = createContainerService({ driver, maxLifetimeSec: 1 });
+    await service.start("plugin-a", { image: "alpine:latest", maxLifetimeSec: 0 });
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(killSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ContainerService — stop unregisters from registry", () => {
   it("stop removes container from registry so it no longer counts against concurrency", async () => {
     const service = createContainerService({ driver: makeFakeDriver(), concurrencyPerPlugin: 1 });

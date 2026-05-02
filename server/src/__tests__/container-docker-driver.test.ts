@@ -124,6 +124,33 @@ describe("createDockerDriver — argument injection hardening", () => {
   });
 });
 
+describe("createDockerDriver — kill failure handling", () => {
+  it("throws when docker rm -f exits non-zero", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "", stderr: "No such container", exitCode: 1 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await expect(driver.kill("missing-id")).rejects.toThrow();
+  });
+});
+
+describe("createDockerDriver — networkMode and allowRootUser", () => {
+  it("passes --network=bridge when networkMode is bridge", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "engine-id-1", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner, networkMode: "bridge" });
+    await driver.start({ image: "alpine:latest", labels: {} });
+    const args = runner.mock.calls[0][0] as string[];
+    expect(args).toContain("--network=bridge");
+    expect(args).not.toContain("--network=none");
+  });
+
+  it("does not override --user when allowRootUser is true", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "engine-id-1", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner, allowRootUser: true });
+    await driver.start({ image: "alpine:latest", labels: {} });
+    const args = runner.mock.calls[0][0] as string[];
+    expect(args).not.toContain("--user=65534:65534");
+  });
+});
+
 describe("createDockerDriver — probe endpoint helper", () => {
   it("probe returns ok:true when docker info succeeds", async () => {
     const runner = vi.fn().mockResolvedValue({ stdout: '{"ServerVersion":"24.0.0"}', stderr: "", exitCode: 0 });
