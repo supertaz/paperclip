@@ -1,7 +1,10 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import net from "node:net";
+import postgres from "postgres";
+import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./test-embedded-postgres.js";
 
 import { assertPgNotReachableOnInterfaces } from "./embedded-pg-lockdown.js";
 
@@ -120,7 +123,8 @@ describe("assertPgNotReachableOnInterfaces", () => {
   });
 });
 
-const REPO_ROOT = resolve("/home/taz/Development/paperclip-plugins/cc-g2-pg-lockdown-impl");
+// packages/db/src/ → repo root is 3 levels up
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 function readSrc(relPath: string): string {
   return readFileSync(resolve(REPO_ROOT, relPath), "utf8");
@@ -144,5 +148,29 @@ describe("postgresFlags static regression guard", () => {
     const { buildEmbeddedPostgresFlags } = await import("./embedded-postgres-flags.js");
     const flags = buildEmbeddedPostgresFlags();
     expect(flags).toEqual(["-c", "listen_addresses=127.0.0.1"]);
+  });
+});
+
+// Integration test: verify the real embedded-postgres process starts with listen_addresses=127.0.0.1
+const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
+const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+
+const cleanups: Array<() => Promise<void>> = [];
+afterAll(async () => {
+  for (const cleanup of cleanups) await cleanup().catch(() => {});
+});
+
+describeEmbeddedPostgres("embedded-postgres listen_addresses lockdown (integration)", () => {
+  it("SHOW listen_addresses returns 127.0.0.1 proving postgresFlags is honored", async () => {
+    const db = await startEmbeddedPostgresTestDatabase("paperclip-pg-lockdown-integration-");
+    cleanups.push(db.cleanup);
+
+    const sql = postgres(db.connectionString, { max: 1 });
+    try {
+      const result = await sql`SHOW listen_addresses`;
+      expect(result[0]?.listen_addresses).toBe("127.0.0.1");
+    } finally {
+      await sql.end();
+    }
   });
 });

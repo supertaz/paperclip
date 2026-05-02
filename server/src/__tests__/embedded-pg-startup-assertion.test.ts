@@ -265,6 +265,10 @@ describe("startServer embedded-pg lockdown: postgresFlags applied at constructor
     createBetterAuthInstanceMock.mockReturnValue({});
     deriveAuthTrustedOriginsMock.mockReturnValue([]);
     process.env.BETTER_AUTH_SECRET = "test-secret";
+    // Hermetic: no non-loopback interfaces, so probe is skipped (empty address list)
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", cidr: null, mac: "00:00:00:00:00:00" }],
+    });
   });
 
   afterEach(() => {
@@ -294,8 +298,14 @@ describe("startServer embedded-pg lockdown: startup assertion", () => {
     vi.restoreAllMocks();
   });
 
-  it("does NOT run probe when bind=loopback (127.0.0.1 only)", async () => {
+  it("does NOT run probe when machine has no non-loopback interfaces", async () => {
     loadConfigMock.mockReturnValue(buildEmbeddedTestConfig({ bind: "loopback", host: "127.0.0.1" }));
+    // Simulate loopback-only machine: only internal interfaces
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      lo: [
+        { address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", cidr: null, mac: "00:00:00:00:00:00" },
+      ],
+    });
     assertPgNotReachableOnInterfacesMock.mockResolvedValue(undefined);
 
     await startServer();
@@ -303,15 +313,19 @@ describe("startServer embedded-pg lockdown: startup assertion", () => {
     expect(assertPgNotReachableOnInterfacesMock).not.toHaveBeenCalled();
   });
 
-  it("runs probe on non-loopback interfaces when bind=lan (0.0.0.0)", async () => {
+  it("runs probe on all non-loopback interfaces regardless of bind mode", async () => {
     loadConfigMock.mockReturnValue(buildEmbeddedTestConfig({
-      bind: "lan",
-      host: "0.0.0.0",
-      deploymentMode: "authenticated",
+      bind: "loopback",
+      host: "127.0.0.1",
     }));
+    // Even loopback bind: probe fires for all non-loopback interfaces on the machine
     vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      lo: [
+        { address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", cidr: null, mac: "00:00:00:00:00:00" },
+      ],
       eth0: [
         { address: "192.168.1.100", family: "IPv4", internal: false, netmask: "255.255.255.0", cidr: null, mac: "00:00:00:00:00:00" },
+        { address: "fe80::1", family: "IPv6", internal: false, netmask: "ffff::", cidr: null, mac: "00:00:00:00:00:00" },
       ],
     });
     assertPgNotReachableOnInterfacesMock.mockResolvedValue(undefined);
@@ -319,7 +333,7 @@ describe("startServer embedded-pg lockdown: startup assertion", () => {
     await startServer();
 
     expect(assertPgNotReachableOnInterfacesMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["192.168.1.100"]),
+      expect.arrayContaining(["192.168.1.100", "fe80::1"]),
       expect.any(Number),
     );
   });

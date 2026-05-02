@@ -26,7 +26,7 @@ import {
   buildEmbeddedPostgresFlags,
   assertPgNotReachableOnInterfaces,
 } from "@paperclipai/db";
-import { isLoopbackHost, isAllInterfacesHost } from "@paperclipai/shared";
+import { isLoopbackHost } from "@paperclipai/shared";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
@@ -444,24 +444,20 @@ export async function startServer(): Promise<StartedServer> {
     resolvedEmbeddedPostgresPort = port;
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
 
-    // Startup assertion: verify pg is not reachable on non-loopback interfaces.
-    // Covers all three startup paths (new start, pid-reuse, no-pid-reuse) because
-    // this runs unconditionally after resolvedEmbeddedPostgresPort is set.
-    // Fail closed: only ECONNREFUSED is treated as "safe".
-    if (!isLoopbackHost(config.host)) {
-      const probeAddresses: string[] = [];
-      if (isAllInterfacesHost(config.host)) {
-        // lan/tailnet via 0.0.0.0 or :: — probe all concrete non-loopback IPv4 addresses
-        const ifaces = Object.values(os.networkInterfaces()).flat();
-        for (const iface of ifaces) {
-          if (iface && !iface.internal && iface.family === "IPv4") {
-            probeAddresses.push(iface.address);
-          }
-        }
-      } else {
-        // custom bind with a concrete host address
-        probeAddresses.push(config.host);
-      }
+    // Startup assertion: verify pg is NOT reachable on any non-loopback interface.
+    // Runs unconditionally — independent of app bind mode — because the invariant
+    // is about pg binding, not HTTP binding. Covers all three startup paths because
+    // this runs after resolvedEmbeddedPostgresPort is set.
+    // Fail closed: only ECONNREFUSED is treated as "not reachable".
+    {
+      const ifaces = Object.values(os.networkInterfaces()).flat();
+      const probeAddresses = [
+        ...new Set(
+          ifaces
+            .filter((iface) => iface && !iface.internal)
+            .map((iface) => iface!.address),
+        ),
+      ];
       if (probeAddresses.length > 0) {
         try {
           await assertPgNotReachableOnInterfaces(probeAddresses, port);
