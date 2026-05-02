@@ -1020,7 +1020,12 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           beforeRunHandler = handler;
           // Notify the host to register this worker as a gate. The host enforces
           // the run.gate capability check and rejects if the plugin lacks it.
-          callHost("runs.registerBeforeRunHandler", {});
+          void callHost("runs.registerBeforeRunHandler", {}).catch((err) => {
+            notifyHost("log", {
+              level: "error",
+              message: `Failed to register beforeRun handler: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          });
         },
       },
     };

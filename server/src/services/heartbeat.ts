@@ -4296,6 +4296,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         finishedAt: cancelled.finishedAt ? new Date(cancelled.finishedAt).toISOString() : null,
       },
     });
+    publishRunLifecyclePluginEvent(cancelled);
 
     await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
       eventType: "lifecycle",
