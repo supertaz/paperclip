@@ -320,6 +320,55 @@ describeEmbeddedPostgres("WF-3 peer entity reads — integration", () => {
     expect(result).toBeNull();
   });
 
+  it("peerEntitiesList throws when consumer lacks plugins.peer-reads.read capability", async () => {
+    const companyId = await createCompany();
+    const providerManifest = makeManifest("test.provider", {
+      peerReads: { allow: [{ entityType: "gitea-pr", consumers: ["test.consumer"] }] },
+    });
+    // Consumer has no capabilities — missing plugins.peer-reads.read
+    const consumerManifest = makeManifest("test.consumer");
+
+    const providerId = await installPlugin(providerManifest);
+    const consumerId = await installPlugin(consumerManifest);
+    await enablePluginForCompany(providerId, companyId);
+    await enablePluginForCompany(consumerId, companyId);
+
+    await expect(
+      registry.peerEntitiesList(consumerId, {
+        companyId,
+        providerPluginKey: "test.provider",
+        entityType: "gitea-pr",
+      }),
+    ).rejects.toThrow("PluginPeerReadDenied");
+  });
+
+  it("peerEntityGet returns null when consumer lacks plugins.peer-reads.read capability", async () => {
+    const companyId = await createCompany();
+    const providerManifest = makeManifest("test.provider", {
+      peerReads: { allow: [{ entityType: "gitea-pr", consumers: ["test.consumer"] }] },
+    });
+    // Consumer has no capabilities — missing plugins.peer-reads.read
+    const consumerManifest = makeManifest("test.consumer");
+
+    const providerId = await installPlugin(providerManifest);
+    const consumerId = await installPlugin(consumerManifest);
+    await enablePluginForCompany(providerId, companyId);
+    await enablePluginForCompany(consumerId, companyId);
+
+    const issueId = randomUUID();
+    const externalId = await seedEntity(providerId, "gitea-pr", issueId);
+
+    const result = await registry.peerEntityGet(consumerId, {
+      companyId,
+      providerPluginKey: "test.provider",
+      entityType: "gitea-pr",
+      externalId,
+      scopeKind: "issue",
+      scopeId: issueId,
+    });
+    expect(result).toBeNull();
+  });
+
   it("peerEntityGet returns row for known externalId", async () => {
     const companyId = await createCompany();
     const providerManifest = makeManifest("test.provider", {

@@ -65,12 +65,20 @@ describe("WF-3 manifest Zod schema round-trip", () => {
     expect(result.peerReads).toBeUndefined();
   });
 
-  it("pluginManifestV1Schema rejects peerReads.allow with empty entityType", () => {
+  it("pluginManifestV1Schema rejects peerReads.allow entry with empty entityType", () => {
     expect(() =>
       pluginManifestV1Schema.parse({
         ...baseManifest,
         peerReads: { allow: [{ entityType: "", consumers: ["x"] }] },
       }),
     ).toThrow();
+  });
+
+  it("pluginManifestV1Schema accepts peerReads.allow as empty array (matches TS type)", () => {
+    const result = pluginManifestV1Schema.parse({
+      ...baseManifest,
+      peerReads: { allow: [] },
+    });
+    expect(result.peerReads?.allow).toHaveLength(0);
   });
 });
