@@ -166,6 +166,29 @@ describe("resolveReachableUrl", () => {
       const result = resolveReachableUrl(input({ authPublicBaseUrl: "://missing-scheme" }));
       expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.invalidBaseUrl });
     });
+
+    it("returns invalid_base_url for bare hostname without scheme", () => {
+      const result = resolveReachableUrl(input({ authPublicBaseUrl: "myhost.example.com" }));
+      expect(result).toEqual({ url: null, reason: REACHABLE_URL_REASON.invalidBaseUrl });
+    });
+
+    it("constructs valid URL for localhost with port (http scheme)", () => {
+      const result = resolveReachableUrl(input({ authPublicBaseUrl: "http://localhost:3000" }));
+      expect(result).toEqual({ url: "http://localhost:3000/api/webhooks/gitea" });
+    });
+
+    it("constructs valid URL for IPv6 address with brackets", () => {
+      const result = resolveReachableUrl(input({
+        authPublicBaseUrl: "https://[::1]:8080",
+        pathname: "/hook",
+      }));
+      expect(result).toEqual({ url: "https://[::1]:8080/hook" });
+    });
+
+    it("constructs valid URL with non-standard port", () => {
+      const result = resolveReachableUrl(input({ authPublicBaseUrl: "https://example.com:8443" }));
+      expect(result).toEqual({ url: "https://example.com:8443/api/webhooks/gitea" });
+    });
   });
 
   describe("result type discrimination", () => {

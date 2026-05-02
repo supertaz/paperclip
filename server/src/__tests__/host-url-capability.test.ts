@@ -80,3 +80,49 @@ describe("host.getReachableUrl capability gating", () => {
     expect(hostStub.getReachableUrl).toHaveBeenCalledWith({ pathname: "/webhook" });
   });
 });
+
+describe("host.getReachableUrl RBAC — cross-plugin isolation", () => {
+  it("plugin-A handlers cannot be used by plugin-B (separate handler sets per pluginId)", async () => {
+    const hostStubA = createHostStub({ url: "https://example.com/a" });
+    const hostStubB = createHostStub({ url: "https://example.com/b" });
+
+    const servicesA = buildHostServices({} as never, "rec-a", "plugin-a", createEventBusStub());
+    const servicesB = buildHostServices({} as never, "rec-b", "plugin-b", createEventBusStub());
+
+    const handlersA = createHostClientHandlers({
+      pluginId: "plugin-a",
+      capabilities: ["host.urls.discover"],
+      services: { ...servicesA, host: hostStubA },
+    });
+    const handlersB = createHostClientHandlers({
+      pluginId: "plugin-b",
+      capabilities: ["host.urls.discover"],
+      services: { ...servicesB, host: hostStubB },
+    });
+
+    await handlersA["host.getReachableUrl"]({ pathname: "/a" });
+    await handlersB["host.getReachableUrl"]({ pathname: "/b" });
+
+    expect(hostStubA.getReachableUrl).toHaveBeenCalledWith({ pathname: "/a" });
+    expect(hostStubB.getReachableUrl).toHaveBeenCalledWith({ pathname: "/b" });
+    expect(hostStubA.getReachableUrl).toHaveBeenCalledTimes(1);
+    expect(hostStubB.getReachableUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("plugin without capability cannot acquire host.urls.discover through any other mechanism", async () => {
+    const services = buildHostServices({} as never, "rec-c", "plugin-c", createEventBusStub());
+    const hostStub = createHostStub({ url: "https://example.com/c" });
+
+    const handlers = createHostClientHandlers({
+      pluginId: "plugin-c",
+      capabilities: ["issues.read"],
+      services: { ...services, host: hostStub },
+    });
+
+    await expect(
+      handlers["host.getReachableUrl"]({ pathname: "/c" }),
+    ).rejects.toMatchObject({ code: PLUGIN_RPC_ERROR_CODES.CAPABILITY_DENIED });
+
+    expect(hostStub.getReachableUrl).not.toHaveBeenCalled();
+  });
+});
