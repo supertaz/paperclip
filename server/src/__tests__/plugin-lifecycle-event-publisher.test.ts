@@ -157,6 +157,19 @@ describe("plugin lifecycle → lifecycleEventPublisher (WS-3)", () => {
     await expect(lifecycle.unload(pluginId)).resolves.not.toThrow();
   });
 
+  it("does not throw when publisher fails inside transition() during load (non-fatal)", async () => {
+    const publisher: LifecycleEventPublisher = vi.fn(async () => {
+      throw new Error("Bus delivery failed in transition");
+    });
+
+    const lifecycle = pluginLifecycleManager(db, {
+      lifecycleEventPublisher: publisher,
+    });
+
+    const pluginId = await insertPlugin("test.fail-publisher-transition");
+    await expect(lifecycle.load(pluginId)).resolves.not.toThrow();
+  });
+
   it("does not throw when no lifecycleEventPublisher is configured", async () => {
     const lifecycle = pluginLifecycleManager(db, {});
     const pluginId = await insertPlugin("test.no-publisher");

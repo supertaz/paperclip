@@ -162,4 +162,20 @@ describe("createLifecycleEventPublisher (WS-3)", () => {
     await expect(partialPublisher("plugin.installed", record)).resolves.not.toThrow();
     expect(partialFailBus.emit).toHaveBeenCalledTimes(3);
   });
+
+  it("does not throw when bus.emit returns non-empty errors array (handler errors logged, not thrown)", async () => {
+    const errorBus = {
+      emit: vi.fn(async () => ({
+        errors: [{ pluginId: "other-plugin", error: new Error("handler crashed") }],
+      })),
+      forPlugin: vi.fn(),
+      clearPlugin: vi.fn(),
+      subscriptionCount: vi.fn(() => 0),
+    };
+    const singleCompanyDb = makeMockDb(["company-x"]);
+    const errorPublisher = createLifecycleEventPublisher(errorBus as never, singleCompanyDb);
+
+    await expect(errorPublisher("plugin.installed", record)).resolves.not.toThrow();
+    expect(errorBus.emit).toHaveBeenCalledOnce();
+  });
 });
