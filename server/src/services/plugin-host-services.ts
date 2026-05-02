@@ -27,6 +27,7 @@ import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
 import { issueService } from "./issues.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
+import { issueCustomFieldService } from "./issue-custom-fields.js";
 import { goalService } from "./goals.js";
 import { documentService } from "./documents.js";
 import { heartbeatService } from "./heartbeat.js";
@@ -473,6 +474,7 @@ export function buildHostServices(
   });
   const projects = projectService(db);
   const issues = issueService(db);
+  const issueCustomFields = issueCustomFieldService(db);
   const documents = documentService(db);
   const goals = goalService(db);
   const activity = activityService(db);
@@ -1592,6 +1594,48 @@ export function buildHostServices(
             documentKey: params.key,
           },
         });
+      },
+    },
+
+    issueCustomFields: {
+      async set(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const pluginRow = await registry.getById(pluginId);
+        const manifest = pluginRow?.manifestJson as { customFields?: Array<{ key: string; label: string; type: string }> } | null;
+        const fieldDecl = manifest?.customFields?.find((f) => f.key === params.key);
+        if (!fieldDecl) {
+          throw new Error(`Plugin has no custom field declared with key '${params.key}'`);
+        }
+        await issueCustomFields.set({
+          companyId,
+          issueId: params.issueId,
+          pluginId,
+          key: params.key,
+          value: params.value,
+          fieldType: fieldDecl.type as any,
+          fieldLabel: fieldDecl.label,
+        });
+      },
+      async unset(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        await issueCustomFields.unset({
+          companyId,
+          issueId: params.issueId,
+          pluginId,
+          key: params.key,
+        });
+      },
+      async listForIssue(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const fields = await issueCustomFields.listForIssue({
+          companyId,
+          issueId: params.issueId,
+          pluginId,
+        });
+        return fields.map((f) => ({ ...f, pluginKey, pluginDisplayName: pluginKey }));
       },
     },
 
