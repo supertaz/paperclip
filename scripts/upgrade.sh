@@ -62,7 +62,7 @@
 #   PAPERCLIP_UPGRADE_ENV_FILE  Optional env file (default: <repo>/.env.upgrade-sh)
 #   PAPERCLIP_UPGRADE_MODE   standard|integration (default: standard)
 #   PAPERCLIP_INTEGRATION_FORK_REMOTE  Fork remote to push composed branch to (default: github-fork)
-#   PAPERCLIP_INTEGRATION_BRANCH  Fork branch for composed upstream+PRs (default: paperclip-integration)
+#   PAPERCLIP_INTEGRATION_BRANCH  Fork branch for composed upstream+PRs (default: master)
 #   PAPERCLIP_INTEGRATION_REPO  GitHub repo for PR discovery (default: paperclipai/paperclip)
 #   PAPERCLIP_INTEGRATION_PR_OWNER  GitHub user whose PRs are included (default: fork owner if set)
 #   PAPERCLIP_INTEGRATION_FORK_OWNER  Fork owner; controls closed-PR removal policy
@@ -121,7 +121,7 @@ PHASE_TIMEOUT_SEC=${PHASE_TIMEOUT_SEC:-1800}
 UPGRADE_MODE="${PAPERCLIP_UPGRADE_MODE:-standard}"
 
 INTEGRATION_FORK_REMOTE="${PAPERCLIP_INTEGRATION_FORK_REMOTE:-github-fork}"
-INTEGRATION_BRANCH="${PAPERCLIP_INTEGRATION_BRANCH:-paperclip-integration}"
+INTEGRATION_BRANCH="${PAPERCLIP_INTEGRATION_BRANCH:-master}"
 INTEGRATION_REPO="${PAPERCLIP_INTEGRATION_REPO:-paperclipai/paperclip}"
 INTEGRATION_FORK_OWNER="${PAPERCLIP_INTEGRATION_FORK_OWNER:-}"
 INTEGRATION_PR_OWNER="${PAPERCLIP_INTEGRATION_PR_OWNER:-$INTEGRATION_FORK_OWNER}"
