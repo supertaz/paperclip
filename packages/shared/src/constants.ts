@@ -630,6 +630,8 @@ export const PLUGIN_CAPABILITIES = [
   "environment.drivers.register",
   // Agent Tools
   "agent.tools.register",
+  // Cross-plugin peer reads
+  "plugins.peer-reads.read",
   // UI
   "instance.settings.register",
   "ui.sidebar.register",
