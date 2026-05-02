@@ -83,6 +83,7 @@ export interface ContainerServiceOpts {
   driver: ContainerEngineDriver;
   concurrencyPerPlugin?: number;
   maxLifetimeSec?: number;
+  memoryMbMax?: number;
 }
 
 export interface ContainerDetail {
@@ -106,7 +107,7 @@ export interface ContainerService {
 }
 
 export function createContainerService(opts: ContainerServiceOpts): ContainerService {
-  const { driver, concurrencyPerPlugin = 10 } = opts;
+  const { driver, concurrencyPerPlugin = 10, maxLifetimeSec, memoryMbMax } = opts;
 
   // host UUID → registry entry
   const registry = new Map<string, RegistryEntry>();
@@ -180,20 +181,33 @@ export function createContainerService(opts: ContainerServiceOpts): ContainerSer
 
       const safeLabels = stripReservedLabels(opts.labels);
       safeLabels["paperclip.plugin-id"] = pluginId;
+      safeLabels["paperclip.managed"] = "true";
+
+      // Clamp plugin-supplied memory to the operator maximum
+      const memoryMb = memoryMbMax !== undefined
+        ? Math.min(opts.memoryMb ?? memoryMbMax, memoryMbMax)
+        : opts.memoryMb;
+
+      // Always apply a bounded lifetime: use plugin value if lower than max, else max
+      const resolvedLifetime = maxLifetimeSec !== undefined
+        ? Math.min(opts.maxLifetimeSec ?? maxLifetimeSec, maxLifetimeSec)
+        : opts.maxLifetimeSec;
 
       const { engineContainerId } = await driver.start({
         ...opts,
         labels: safeLabels,
+        memoryMb,
       });
 
       const hostContainerId = randomUUID();
-      registerEntry(pluginId, hostContainerId, engineContainerId, opts.maxLifetimeSec);
+      registerEntry(pluginId, hostContainerId, engineContainerId, resolvedLifetime);
       return { containerId: hostContainerId };
     },
 
     async stop(pluginId, containerId) {
       const entry = assertOwnership(pluginId, containerId);
       await driver.stop(entry.engineContainerId);
+      unregisterEntry(containerId);
     },
 
     async kill(pluginId, containerId) {
@@ -221,7 +235,7 @@ export function createContainerService(opts: ContainerServiceOpts): ContainerSer
           image: detail.image,
           status: detail.status,
           createdAt: detail.createdAt,
-          labels: detail.labels,
+          labels: stripReservedLabels(detail.labels),
         });
       }
       return results;
@@ -240,7 +254,7 @@ export function createContainerService(opts: ContainerServiceOpts): ContainerSer
         image: detail.image,
         status: detail.status,
         createdAt: detail.createdAt,
-        labels: detail.labels,
+        labels: stripReservedLabels(detail.labels),
       };
     },
 

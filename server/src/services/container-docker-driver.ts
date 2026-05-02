@@ -91,6 +91,28 @@ export interface DockerDriver extends ContainerEngineDriver {
   probe(): Promise<{ ok: boolean; summary?: string; error?: string }>;
 }
 
+// OCI image reference: optional registry/repo, required name, optional tag/digest.
+// Rejects anything starting with '-' to block CLI option injection.
+const OCI_IMAGE_RE = /^[a-z0-9]([a-z0-9._\-/:@]*[a-z0-9])?$/i;
+
+function validateImage(image: string): void {
+  if (!OCI_IMAGE_RE.test(image)) {
+    throw new Error(`Invalid image reference: "${image}"`);
+  }
+}
+
+function validateLabelKey(key: string): void {
+  if (key.includes("=")) {
+    throw new Error(`Invalid label key "${key}": must not contain '='`);
+  }
+}
+
+function validateEnvKey(key: string): void {
+  if (key.includes("=")) {
+    throw new Error(`Invalid env key "${key}": must not contain '='`);
+  }
+}
+
 export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
   const cliBin = opts.cliBin ?? "docker";
   const runner = opts.cliRunner ?? makeSpawnRunner(cliBin, opts.socketPath);
@@ -105,6 +127,10 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
 
   return {
     async start(startOpts) {
+      validateImage(startOpts.image);
+      for (const k of Object.keys(startOpts.labels ?? {})) validateLabelKey(k);
+      for (const k of Object.keys(startOpts.env ?? {})) validateEnvKey(k);
+
       const args: string[] = ["run", "-d", "--rm"];
 
       // Mandatory hardening — not overridable by plugins
@@ -132,6 +158,8 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
         args.push(`-e`, `${k}=${v}`);
       }
 
+      // -- terminates option parsing so image name cannot be a flag
+      args.push("--");
       args.push(startOpts.image);
 
       if (startOpts.cmd && startOpts.cmd.length > 0) {

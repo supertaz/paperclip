@@ -1217,11 +1217,15 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         async start(opts) {
           requireCapability(manifest, capabilitySet, "containers.manage");
           const containerId = randomUUID();
+          const safeLabels: Record<string, string> = {};
+          for (const [k, v] of Object.entries(opts.labels ?? {})) {
+            if (!k.startsWith("paperclip.")) safeLabels[k] = v;
+          }
           containerRegistry.set(containerId, {
             image: opts.image,
             status: "running",
             createdAt: new Date().toISOString(),
-            labels: opts.labels ?? {},
+            labels: safeLabels,
           });
           return { containerId };
         },

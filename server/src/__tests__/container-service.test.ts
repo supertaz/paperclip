@@ -58,13 +58,14 @@ describe("ContainerService — start + assertOwnership", () => {
     expect(containerId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("start strips paperclip.* from plugin-supplied labels", async () => {
+  it("start strips paperclip.* from plugin-supplied labels — plugin cannot observe them", async () => {
     const { containerId } = await service.start(pluginId, {
       image: "alpine:latest",
       labels: { "paperclip.plugin-id": "spoofed", userLabel: "ok" },
     });
     const detail = await service.inspect(pluginId, containerId);
-    expect(detail?.labels["paperclip.plugin-id"]).toBe(pluginId);
+    // paperclip.* labels are internal and stripped from plugin-visible output
+    expect(detail?.labels["paperclip.plugin-id"]).toBeUndefined();
     expect(detail?.labels["userLabel"]).toBe("ok");
   });
 
@@ -100,7 +101,8 @@ describe("ContainerService — start + assertOwnership", () => {
     await service.start("other-plugin", { image: "alpine:latest" });
     const list = await service.list(pluginId, {});
     expect(list).toHaveLength(2);
-    expect(list.every((c) => c.labels["paperclip.plugin-id"] === pluginId)).toBe(true);
+    // paperclip.* labels are stripped from plugin-visible results
+    expect(list.every((c) => c.labels["paperclip.plugin-id"] === undefined)).toBe(true);
   });
 });
 

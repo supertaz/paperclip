@@ -191,6 +191,7 @@ export async function createApp(
         driver: dockerDriver,
         concurrencyPerPlugin: containerEngineSettings.concurrencyPerPlugin,
         maxLifetimeSec: containerEngineSettings.maxLifetimeSecMax,
+        memoryMbMax: containerEngineSettings.memoryMbMax,
       })
     : null;
   if (dockerDriver) {
