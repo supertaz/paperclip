@@ -338,6 +338,27 @@ export const pluginsApi = {
     api.post<{ valid: boolean; message?: string }>(`/plugins/${pluginId}/config/test`, { configJson }),
 
   // ===========================================================================
+  // Plugin runtime config endpoints (operator inspect / clear)
+  // ===========================================================================
+
+  /**
+   * Fetch the current plugin-managed runtime configuration and revision.
+   *
+   * @param pluginId - UUID of the plugin.
+   */
+  getRuntimeConfig: (pluginId: string) =>
+    api.get<{ values: Record<string, unknown>; revision: string }>(`/plugins/${pluginId}/runtime-config`),
+
+  /**
+   * Clear all plugin-managed runtime configuration for a plugin.
+   * Restricted to instance admins.
+   *
+   * @param pluginId - UUID of the plugin.
+   */
+  clearRuntimeConfig: (pluginId: string) =>
+    api.delete<void>(`/plugins/${pluginId}/runtime-config`),
+
+  // ===========================================================================
   // Bridge proxy endpoints — used by the plugin UI bridge runtime
   // ===========================================================================
 
