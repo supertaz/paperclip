@@ -1867,30 +1867,30 @@ export function buildHostServices(
     containers: {
       async start(params) {
         if (!options.containerService) throw new Error("Container engine is disabled");
-        return options.containerService.start(pluginKey, params);
+        return options.containerService.start(pluginId, params);
       },
       async stop(params) {
         if (!options.containerService) throw new Error("Container engine is disabled");
-        return options.containerService.stop(pluginKey, params.containerId);
+        return options.containerService.stop(pluginId, params.containerId);
       },
       async kill(params) {
         if (!options.containerService) throw new Error("Container engine is disabled");
-        return options.containerService.kill(pluginKey, params.containerId);
+        return options.containerService.kill(pluginId, params.containerId);
       },
       async exec(params) {
         if (!options.containerService) throw new Error("Container engine is disabled");
-        return options.containerService.exec(pluginKey, params.containerId, params.cmd, {
+        return options.containerService.exec(pluginId, params.containerId, params.cmd, {
           timeoutMs: params.timeoutMs,
           env: params.env,
         });
       },
       async list(params) {
         if (!options.containerService) return [];
-        return options.containerService.list(pluginKey, { status: params.status });
+        return options.containerService.list(pluginId, { status: params.status });
       },
       async inspect(params) {
         if (!options.containerService) return null;
-        return options.containerService.inspect(pluginKey, params.containerId);
+        return options.containerService.inspect(pluginId, params.containerId);
       },
     },
 
@@ -1916,7 +1916,7 @@ export function buildHostServices(
       }
 
       // Kill all containers owned by this plugin on unload.
-      options.containerService?.disposePlugin(pluginKey).catch((err) => {
+      options.containerService?.disposePlugin(pluginId).catch((err) => {
         logger.error({ pluginId, pluginKey, err }, "Container dispose on plugin unload failed");
       });
 

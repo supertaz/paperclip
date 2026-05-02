@@ -200,6 +200,7 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
     async exec(engineContainerId, cmd, execOpts) {
       const args = ["exec"];
       for (const [k, v] of Object.entries(execOpts?.env ?? {})) {
+        validateEnvKey(k);
         args.push("-e", `${k}=${v}`);
       }
       args.push(engineContainerId, ...cmd);
