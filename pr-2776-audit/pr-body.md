@@ -31,7 +31,13 @@ Credits: initial implementation approach from @insanepoet (PR #2776).
 - Tier 3 (e2e): 11 tests total — 7 supertest RBAC route tests (instance admin, `local_implicit`, non-admin, plugin actor, agent actor; response shape; empty array) in `plugin-secrets-route.test.ts`; 4 Playwright UI tests (panel heading, empty state, board-user-secret isolation, capability description) in `tests/e2e/plugin-secrets-panel.spec.ts`
 - Tier 4 (RBAC matrix): Covered by the 5-actor supertest suite — each actor type asserted allow/deny at the route boundary
 
-**Coverage:** New code (lines 343+ in `plugin-secrets-handler.ts`) — 100% statement coverage, 100% branch coverage via `@vitest/coverage-v8`. Pre-existing `resolve()` path (lines 59–341) is unchanged and covered by existing tests.
+**Coverage:** All branches and functions **introduced by this PR** are 100% covered via `@vitest/coverage-v8`:
+- `plugin-secrets-handler.ts` new code (`write`, `delete`): 51/51 branches (100%), both functions fully hit (39 and 28 invocations). Pre-existing functions (`resolve`, `secretNotFound`, `secretVersionNotFound`, `invalidSecretRef`, `extractSecretRefsFromConfig`) predate this PR and are covered by separate pre-existing tests.
+- `instance-settings.ts`: 9/9 branches, 2/2 new functions.
+- `plugin-capability-validator.ts`, `plugin-host-services.ts`: 100% on new additions.
+- `secrets.ts` `listPluginOwned`: fully covered by 4 Tier 2 integration tests; the single V8-reported uncovered branch is a module-level ESM instrumentation artifact (the structurally unreachable "module not evaluated" path).
+
+Aggregate server-package branch percentage is lower due to pre-existing test debt in unrelated files. Full per-file breakdown in `pr-2776-audit/coverage-uncovered-branches.txt`.
 
 **Pre-submission review:** Pre-Greptile self-review attempted twice via `codex exec --model gpt-5.4-mini -c model_reasoning_effort=xhigh`; both runs timed out during codebase exploration with no findings emitted. Substitute review performed manually (sonnet) on the integrated diff; no MUST-FIX findings in new code; two pre-existing out-of-scope issues documented in Known follow-ups below.
 
