@@ -497,6 +497,17 @@ for (const file of readSqlFiles()) {
     .filter((entryTag) => typeof entryTag === "string" && suffix(entryTag) === fileSuffix);
   const missingTargetTags = targetTags.filter((entryTag) => !fs.existsSync(path.join(migrationsDir, `${entryTag}.sql`)));
 
+  if (targetTags.length === 1 && missingTargetTags.length === 0) {
+    const sourcePath = path.join(migrationsDir, file);
+    const targetPath = path.join(migrationsDir, `${targetTags[0]}.sql`);
+    if (fs.existsSync(targetPath) && fs.readFileSync(sourcePath, "utf8") === fs.readFileSync(targetPath, "utf8")) {
+      fs.unlinkSync(sourcePath);
+      console.log(`removed duplicate ${file}; ${targetTags[0]}.sql already exists`);
+      changed = true;
+    }
+    continue;
+  }
+
   if (missingTargetTags.length !== 1) {
     continue;
   }
