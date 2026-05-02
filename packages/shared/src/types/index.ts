@@ -324,6 +324,8 @@ export type {
   PluginApiRouteCompanyResolution,
   PluginApiRouteDeclaration,
   PaperclipPluginManifestV1,
+  PluginPeerReadsDeclaration,
+  PluginPeerReadEntityDeclaration,
   PluginRecord,
   PluginDatabaseNamespaceRecord,
   PluginMigrationRecord,
