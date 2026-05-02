@@ -476,6 +476,11 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
 
   const ctx: PluginContext = {
     manifest,
+    host: {
+      async getReachableUrl() {
+        return { url: null, reason: "loopback_bind" };
+      },
+    },
     config: {
       async get() {
         return { ...currentConfig };

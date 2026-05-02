@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Db } from "@paperclipai/db";
-import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
+import type { BindMode, DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
@@ -51,12 +51,14 @@ import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js
 import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
 import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
 import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-services.js";
+import { heartbeatService } from "./services/heartbeat.js";
 import { createPluginEventBus } from "./services/plugin-event-bus.js";
 import { setPluginEventBus } from "./services/activity-log.js";
 import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
 import { createPluginHostServiceCleanup } from "./services/plugin-host-service-cleanup.js";
 import { pluginRegistryService } from "./services/plugin-registry.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
+import { resolveReachableUrl } from "./services/host-urls.js";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 import { createCachedViteHtmlRenderer } from "./vite-html-renderer.js";
 
@@ -124,6 +126,8 @@ export async function createApp(
     deploymentExposure: DeploymentExposure;
     allowedHostnames: string[];
     bindHost: string;
+    bind: BindMode;
+    authPublicBaseUrl?: string | undefined;
     authReady: boolean;
     companyDeletionEnabled: boolean;
     instanceId?: string;
@@ -133,6 +137,7 @@ export async function createApp(
     pluginWorkerManager?: PluginWorkerManager;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    schedulerHeartbeat?: ReturnType<typeof heartbeatService>;
   },
 ) {
   const app = express();
@@ -259,10 +264,23 @@ export async function createApp(
           const handle = workerManager.getWorker(pluginId);
           if (handle) handle.notify(method, params);
         };
-        const services = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker, {
+        const baseServices = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker, {
           pluginWorkerManager: workerManager,
         });
-        hostServicesDisposers.set(pluginId, () => services.dispose());
+        hostServicesDisposers.set(pluginId, () => baseServices.dispose());
+        const services = {
+          ...baseServices,
+          host: {
+            getReachableUrl: ({ pathname }: { pathname: string }) =>
+              Promise.resolve(resolveReachableUrl({
+                bind: opts.bind,
+                deploymentMode: opts.deploymentMode,
+                deploymentExposure: opts.deploymentExposure,
+                authPublicBaseUrl: opts.authPublicBaseUrl,
+                pathname,
+              })),
+          },
+        };
         return createHostClientHandlers({
           pluginId,
           capabilities: manifest.capabilities,
