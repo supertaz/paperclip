@@ -51,6 +51,7 @@ import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { logger } from "../middleware/logger.js";
 import { getTelemetryClient } from "../telemetry.js";
+import type { ContainerService } from "./container-service.js";
 
 // ---------------------------------------------------------------------------
 // SSRF protection for plugin HTTP fetch
@@ -460,7 +461,7 @@ export function buildHostServices(
   pluginKey: string,
   eventBus: PluginEventBus,
   notifyWorker?: (method: string, params: unknown) => void,
-  options: { pluginWorkerManager?: PluginWorkerManager } = {},
+  options: { pluginWorkerManager?: PluginWorkerManager; containerService?: ContainerService } = {},
 ): HostServices & { dispose(): void } {
   const registry = pluginRegistryService(db);
   const stateStore = pluginStateStore(db);
@@ -1863,6 +1864,36 @@ export function buildHostServices(
       },
     },
 
+    containers: {
+      async start(params) {
+        if (!options.containerService) throw new Error("Container engine is disabled");
+        return options.containerService.start(pluginKey, params);
+      },
+      async stop(params) {
+        if (!options.containerService) throw new Error("Container engine is disabled");
+        return options.containerService.stop(pluginKey, params.containerId);
+      },
+      async kill(params) {
+        if (!options.containerService) throw new Error("Container engine is disabled");
+        return options.containerService.kill(pluginKey, params.containerId);
+      },
+      async exec(params) {
+        if (!options.containerService) throw new Error("Container engine is disabled");
+        return options.containerService.exec(pluginKey, params.containerId, params.cmd, {
+          timeoutMs: params.timeoutMs,
+          env: params.env,
+        });
+      },
+      async list(params) {
+        if (!options.containerService) return [];
+        return options.containerService.list(pluginKey, { status: params.status });
+      },
+      async inspect(params) {
+        if (!options.containerService) return null;
+        return options.containerService.inspect(pluginKey, params.containerId);
+      },
+    },
+
     /**
      * Clean up all active session event subscriptions and flush any buffered
      * log entries. Must be called when the plugin worker is stopped, crashed,
@@ -1883,6 +1914,11 @@ export function buildHostServices(
         clearTimeout(entry.timer);
         entry.unsubscribe();
       }
+
+      // Kill all containers owned by this plugin on unload.
+      options.containerService?.disposePlugin(pluginKey).catch((err) => {
+        logger.error({ pluginId, pluginKey, err }, "Container dispose on plugin unload failed");
+      });
 
       // Flush any buffered log entries synchronously-as-possible on dispose.
       flushPluginLogBuffer().catch((err) => {
