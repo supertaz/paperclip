@@ -195,13 +195,16 @@ export interface HostServices {
     delete(params: WorkerToHostMethods["issues.documents.delete"][0]): Promise<WorkerToHostMethods["issues.documents.delete"][1]>;
   };
 
-  /** Provides `agents.list`, `agents.get`, `agents.pause`, `agents.resume`, `agents.invoke`. */
+  /** Provides `agents.list`, `agents.get`, `agents.pause`, `agents.resume`, `agents.invoke`, and org-chart traversal. */
   agents: {
     list(params: WorkerToHostMethods["agents.list"][0]): Promise<WorkerToHostMethods["agents.list"][1]>;
     get(params: WorkerToHostMethods["agents.get"][0]): Promise<WorkerToHostMethods["agents.get"][1]>;
     pause(params: WorkerToHostMethods["agents.pause"][0]): Promise<WorkerToHostMethods["agents.pause"][1]>;
     resume(params: WorkerToHostMethods["agents.resume"][0]): Promise<WorkerToHostMethods["agents.resume"][1]>;
     invoke(params: WorkerToHostMethods["agents.invoke"][0]): Promise<WorkerToHostMethods["agents.invoke"][1]>;
+    getDescendants(params: WorkerToHostMethods["agents.orgChart.getDescendants"][0]): Promise<WorkerToHostMethods["agents.orgChart.getDescendants"][1]>;
+    getParent(params: WorkerToHostMethods["agents.orgChart.getParent"][0]): Promise<WorkerToHostMethods["agents.orgChart.getParent"][1]>;
+    isDescendantOf(params: WorkerToHostMethods["agents.orgChart.isDescendantOf"][0]): Promise<WorkerToHostMethods["agents.orgChart.isDescendantOf"][1]>;
   };
 
   /** Provides `agents.sessions.create`, `agents.sessions.list`, `agents.sessions.sendMessage`, `agents.sessions.close`. */
@@ -363,6 +366,11 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "agents.sessions.list": "agent.sessions.list",
   "agents.sessions.sendMessage": "agent.sessions.send",
   "agents.sessions.close": "agent.sessions.close",
+
+  // Agents (org-chart traversal)
+  "agents.orgChart.getDescendants": "agents.org-chart.read",
+  "agents.orgChart.getParent": "agents.org-chart.read",
+  "agents.orgChart.isDescendantOf": "agents.org-chart.read",
 
   // Goals
   "goals.list": "goals.read",
@@ -610,6 +618,19 @@ export function createHostClientHandlers(
     }),
     "agents.invoke": gated("agents.invoke", async (params) => {
       return services.agents.invoke(params);
+    }),
+
+    // Agents (org-chart traversal)
+    "agents.orgChart.getDescendants": gated("agents.orgChart.getDescendants", async (params) => {
+      requireCapability("agents.list"); // also requires agents.read
+      return services.agents.getDescendants(params);
+    }),
+    "agents.orgChart.getParent": gated("agents.orgChart.getParent", async (params) => {
+      requireCapability("agents.list"); // also requires agents.read
+      return services.agents.getParent(params);
+    }),
+    "agents.orgChart.isDescendantOf": gated("agents.orgChart.isDescendantOf", async (params) => {
+      return services.agents.isDescendantOf(params);
     }),
 
     // Agent Sessions
