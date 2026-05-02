@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PLUGIN_CAPABILITIES } from "../constants.js";
+import { pluginCustomFieldDeclarationSchema } from "../validators/index.js";
 
 describe("WS-4 capability constants", () => {
   it("includes issue.custom-fields.read capability", () => {
@@ -48,5 +49,53 @@ describe("IssueCustomFieldDeclaration type contract", () => {
   it("field key regex rejects empty string", () => {
     const regex = /^[a-z][a-z0-9_-]*$/;
     expect(regex.test("")).toBe(false);
+  });
+});
+
+describe("pluginCustomFieldDeclarationSchema", () => {
+  it("accepts valid text field", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({ key: "workstream", label: "Workstream", type: "text", scope: "issue" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts valid number field", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({ key: "score", label: "Score", type: "number", scope: "issue" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts valid url field", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({ key: "docs", label: "Docs", type: "url", scope: "issue" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts valid enum-ref field with enumValues", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({
+      key: "status", label: "Status", type: "enum-ref", scope: "issue",
+      enumValues: [{ id: "open", label: "Open" }, { id: "closed", label: "Closed" }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects enum-ref without enumValues", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({ key: "status", label: "Status", type: "enum-ref", scope: "issue" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-enum type with enumValues", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({
+      key: "notes", label: "Notes", type: "text", scope: "issue",
+      enumValues: [{ id: "a", label: "A" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid field key (dots)", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({ key: "bad.key", label: "Label", type: "text", scope: "issue" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid field key (uppercase)", () => {
+    const result = pluginCustomFieldDeclarationSchema.safeParse({ key: "BadKey", label: "Label", type: "text", scope: "issue" });
+    expect(result.success).toBe(false);
   });
 });

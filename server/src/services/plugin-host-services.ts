@@ -1602,10 +1602,18 @@ export function buildHostServices(
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
         const pluginRow = await registry.getById(pluginId);
-        const manifest = pluginRow?.manifestJson as { customFields?: Array<{ key: string; label: string; type: string }> } | null;
+        const manifest = pluginRow?.manifestJson as { customFields?: Array<{ key: string; label: string; type: string; enumValues?: Array<{ id: string; label: string }> }> } | null;
         const fieldDecl = manifest?.customFields?.find((f) => f.key === params.key);
         if (!fieldDecl) {
           throw new Error(`Plugin has no custom field declared with key '${params.key}'`);
+        }
+        if (fieldDecl.type === "enum-ref") {
+          const allowed = (fieldDecl.enumValues ?? []).map((e) => e.id);
+          if (!allowed.includes(params.value)) {
+            throw new Error(
+              `Value '${params.value}' is not a declared enum option for field '${params.key}'`,
+            );
+          }
         }
         await issueCustomFields.set({
           companyId,
@@ -1616,6 +1624,13 @@ export function buildHostServices(
           fieldType: fieldDecl.type as any,
           fieldLabel: fieldDecl.label,
         });
+        await logPluginActivity({
+          companyId,
+          action: "issue.custom_field_set",
+          entityType: "issue",
+          entityId: params.issueId,
+          details: { fieldKey: params.key, fieldType: fieldDecl.type, fieldLabel: fieldDecl.label },
+        });
       },
       async unset(params) {
         const companyId = ensureCompanyId(params.companyId);
@@ -1625,6 +1640,13 @@ export function buildHostServices(
           issueId: params.issueId,
           pluginId,
           key: params.key,
+        });
+        await logPluginActivity({
+          companyId,
+          action: "issue.custom_field_unset",
+          entityType: "issue",
+          entityId: params.issueId,
+          details: { fieldKey: params.key },
         });
       },
       async listForIssue(params) {
