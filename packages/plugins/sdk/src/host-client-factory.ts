@@ -622,11 +622,11 @@ export function createHostClientHandlers(
 
     // Agents (org-chart traversal)
     "agents.orgChart.getDescendants": gated("agents.orgChart.getDescendants", async (params) => {
-      requireCapability("agents.list"); // also requires agents.read
+      if (!capabilitySet.has("agents.read")) throw new CapabilityDeniedError(pluginId, "agents.orgChart.getDescendants", "agents.read");
       return services.agents.getDescendants(params);
     }),
     "agents.orgChart.getParent": gated("agents.orgChart.getParent", async (params) => {
-      requireCapability("agents.list"); // also requires agents.read
+      if (!capabilitySet.has("agents.read")) throw new CapabilityDeniedError(pluginId, "agents.orgChart.getParent", "agents.read");
       return services.agents.getParent(params);
     }),
     "agents.orgChart.isDescendantOf": gated("agents.orgChart.isDescendantOf", async (params) => {
