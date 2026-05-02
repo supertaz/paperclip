@@ -39,7 +39,10 @@ async function ensureTestSlice(): Promise<void> {
   await mkdir(TEST_CGROUP_ROOT, { recursive: true });
   const controllers = await readFile(
     path.join(APP_SLICE, "cgroup.controllers"), "utf8"
-  );
+  ).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT" || err.code === "EACCES") return "";
+    throw err;
+  });
   const available = controllers.trim().split(/\s+/);
   const toEnable = available.filter((c) => ["cpu", "memory", "pids"].includes(c));
   if (toEnable.length > 0) {
@@ -48,8 +51,10 @@ async function ensureTestSlice(): Promise<void> {
       toEnable.map((c) => `+${c}`).join(" "),
       "utf8",
     ).catch((err: NodeJS.ErrnoException) => {
-      // EINVAL: already enabled or not available in this host's delegation — ignore
-      if (err.code !== "EINVAL") throw err;
+      // EINVAL: already enabled or not available
+      // ENOENT: TEST_CGROUP_ROOT exists as filesystem dir but is not a real cgroup
+      //   (kernel didn't create pseudo-files) — not a delegated cgroupsv2 host
+      if (err.code !== "EINVAL" && err.code !== "ENOENT") throw err;
     });
   }
 }
