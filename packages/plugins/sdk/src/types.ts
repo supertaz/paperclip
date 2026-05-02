@@ -1453,6 +1453,11 @@ export interface PluginApprovalsClient {
     companyId: string;
   }): Promise<PluginApproval | null>;
 
+  /**
+   * Returns up to 100 approvals for this plugin. `issueId` is always `null`
+   * in list results — call `get` on individual approvals if you need the linked
+   * issue id.
+   */
   list(params: {
     companyId: string;
     status?: string;

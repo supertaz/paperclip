@@ -1887,9 +1887,13 @@ export function buildHostServices(
         const row = await approvalsService.create(companyId, {
           type: "plugin_workflow",
           requestedByAgentId: params.actorAgentId ?? null,
-          requestedByUserId: params.actorRunId ?? null,
+          requestedByUserId: null,
           status: "pending",
-          payload: { prompt: params.prompt, ...(params.payload ?? {}) },
+          payload: {
+            prompt: params.prompt,
+            ...(params.actorRunId ? { actorRunId: params.actorRunId } : {}),
+            ...(params.payload ?? {}),
+          },
           sourcePluginId: pluginId,
           sourcePluginKey: pluginKey,
         });
@@ -1954,6 +1958,8 @@ export function buildHostServices(
 
       async subscribe(params) {
         const row = await approvalsService.getById(params.approvalId);
+        // sourcePluginId check is sufficient isolation: pluginId is server-enforced
+        // (from the plugin worker's registered identity), not caller-supplied.
         if (!row || row.sourcePluginId !== pluginId) {
           return { status: "not_found" };
         }
