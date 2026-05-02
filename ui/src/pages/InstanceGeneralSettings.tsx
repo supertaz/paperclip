@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   PatchInstanceGeneralSettings,
   BackupRetentionPolicy,
+  RunawayDetectorSettings,
   RecoveryProtectionSettings,
 } from "@paperclipai/shared";
 import {
@@ -10,6 +11,7 @@ import {
   WEEKLY_RETENTION_PRESETS,
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
+  DEFAULT_RUNAWAY_SETTINGS,
   DEFAULT_RECOVERY_PROTECTION_SETTINGS,
 } from "@paperclipai/shared";
 import { LogOut, SlidersHorizontal } from "lucide-react";
@@ -86,6 +88,7 @@ export function InstanceGeneralSettings() {
   const keyboardShortcuts = generalQuery.data?.keyboardShortcuts === true;
   const feedbackDataSharingPreference = generalQuery.data?.feedbackDataSharingPreference ?? "prompt";
   const backupRetention: BackupRetentionPolicy = generalQuery.data?.backupRetention ?? DEFAULT_BACKUP_RETENTION;
+  const runaway: RunawayDetectorSettings = generalQuery.data?.runaway ?? DEFAULT_RUNAWAY_SETTINGS;
   const recoveryProtection: RecoveryProtectionSettings =
     generalQuery.data?.recoveryProtection ?? DEFAULT_RECOVERY_PROTECTION_SETTINGS;
 
@@ -283,6 +286,100 @@ export function InstanceGeneralSettings() {
       <section className="rounded-xl border border-border bg-card p-5">
         <div className="space-y-5">
           <div className="space-y-1.5">
+            <h2 className="text-sm font-semibold">Runaway detector</h2>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              Automatically pauses agents that enqueue runs too rapidly. The fast-trip threshold
+              trips within a short window; the slow-trip catches sustained over-activity.
+              Startup guard pauses the system at boot when the queued backlog is too large.
+            </p>
+          </div>
+
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-medium">Auto-pause on runaway</h3>
+              <p className="text-sm text-muted-foreground">
+                When enabled, agents that exceed the fast or slow enqueue thresholds are
+                automatically paused.
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={runaway.autoPauseEnabled}
+              onCheckedChange={() =>
+                updateGeneralMutation.mutate({ runaway: { ...runaway, autoPauseEnabled: !runaway.autoPauseEnabled } })
+              }
+              disabled={updateGeneralMutation.isPending}
+              aria-label="Toggle runaway auto-pause"
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <InstanceNumberField
+              label="Fast window"
+              description="Seconds"
+              value={runaway.fastWindowSec}
+              min={5}
+              disabled={updateGeneralMutation.isPending}
+              onCommit={(v) => updateGeneralMutation.mutate({ runaway: { ...runaway, fastWindowSec: v } })}
+            />
+            <InstanceNumberField
+              label="Fast threshold"
+              description="Max enqueues in fast window"
+              value={runaway.fastThresholdCount}
+              min={1}
+              disabled={updateGeneralMutation.isPending}
+              onCommit={(v) => updateGeneralMutation.mutate({ runaway: { ...runaway, fastThresholdCount: v } })}
+            />
+            <InstanceNumberField
+              label="Slow window"
+              description="Seconds"
+              value={runaway.slowWindowSec}
+              min={5}
+              disabled={updateGeneralMutation.isPending}
+              onCommit={(v) => updateGeneralMutation.mutate({ runaway: { ...runaway, slowWindowSec: v } })}
+            />
+            <InstanceNumberField
+              label="Slow threshold"
+              description="Max enqueues in slow window"
+              value={runaway.slowThresholdCount}
+              min={1}
+              disabled={updateGeneralMutation.isPending}
+              onCommit={(v) => updateGeneralMutation.mutate({ runaway: { ...runaway, slowThresholdCount: v } })}
+            />
+          </div>
+
+          <div className="flex items-start justify-between gap-4 border-t border-border pt-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-medium">Startup guard</h3>
+              <p className="text-sm text-muted-foreground">
+                Pauses the system at boot when the queued-run backlog exceeds the threshold,
+                preventing an immediate re-flood after a crash recovery. This check runs once
+                at process start — it is not a continuous guard.
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={runaway.startupGuardEnabled}
+              onCheckedChange={() =>
+                updateGeneralMutation.mutate({ runaway: { ...runaway, startupGuardEnabled: !runaway.startupGuardEnabled } })
+              }
+              disabled={updateGeneralMutation.isPending}
+              aria-label="Toggle startup guard"
+            />
+          </div>
+
+          <InstanceNumberField
+            label="Startup guard threshold"
+            description="Queued runs at boot that trigger a system pause"
+            value={runaway.startupGuardThreshold}
+            min={1}
+            disabled={updateGeneralMutation.isPending || !runaway.startupGuardEnabled}
+            onCommit={(v) => updateGeneralMutation.mutate({ runaway: { ...runaway, startupGuardThreshold: v } })}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5">
+        <div className="space-y-5">
+          <div className="space-y-1.5">
             <h2 className="text-sm font-semibold">Recovery protection</h2>
             <p className="max-w-2xl text-sm text-muted-foreground">
               Bound automatic continuation recovery so issues that keep cycling are blocked for operator review
@@ -442,7 +539,7 @@ function InstanceNumberField({
   description: string;
   value: number;
   min: number;
-  max: number;
+  max?: number;
   disabled: boolean;
   onCommit: (v: number) => void;
 }) {
@@ -456,8 +553,9 @@ function InstanceNumberField({
     !/^\d+$/.test(trimmedDraft) ||
     Number.isNaN(parsedDraft) ||
     parsedDraft < min ||
-    parsedDraft > max;
-  const errorMessage = invalidDraft ? `Enter a whole number from ${min} to ${max}.` : null;
+    (max !== undefined && parsedDraft > max);
+  const rangeDescription = max === undefined ? `at least ${min}` : `from ${min} to ${max}`;
+  const errorMessage = invalidDraft ? `Enter a whole number ${rangeDescription}.` : null;
 
   useEffect(() => {
     setDraft(String(value));
