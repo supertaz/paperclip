@@ -313,29 +313,50 @@ describe("startServer embedded-pg lockdown: startup assertion", () => {
     expect(assertPgNotReachableOnInterfacesMock).not.toHaveBeenCalled();
   });
 
-  it("runs probe on all non-loopback interfaces regardless of bind mode", async () => {
+  it("runs probe on non-loopback non-link-local interfaces regardless of bind mode", async () => {
     loadConfigMock.mockReturnValue(buildEmbeddedTestConfig({
       bind: "loopback",
       host: "127.0.0.1",
     }));
-    // Even loopback bind: probe fires for all non-loopback interfaces on the machine
+    // Even loopback bind: probe fires for non-loopback interfaces — but excludes fe80: link-local
     vi.spyOn(os, "networkInterfaces").mockReturnValue({
       lo: [
         { address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", cidr: null, mac: "00:00:00:00:00:00" },
       ],
       eth0: [
         { address: "192.168.1.100", family: "IPv4", internal: false, netmask: "255.255.255.0", cidr: null, mac: "00:00:00:00:00:00" },
-        { address: "fe80::1", family: "IPv6", internal: false, netmask: "ffff::", cidr: null, mac: "00:00:00:00:00:00" },
+        { address: "fe80::1", family: "IPv6", internal: false, netmask: "ffff::", cidr: null, mac: "00:00:00:00:00:00", scopeid: 2 },
       ],
     });
     assertPgNotReachableOnInterfacesMock.mockResolvedValue(undefined);
 
     await startServer();
 
+    // IPv4 LAN address probed; fe80: link-local excluded (ENETUNREACH without scope ID)
     expect(assertPgNotReachableOnInterfacesMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["192.168.1.100", "fe80::1"]),
+      expect.arrayContaining(["192.168.1.100"]),
       expect.any(Number),
     );
+    const probeCall = assertPgNotReachableOnInterfacesMock.mock.calls[0];
+    expect(probeCall?.[0]).not.toContain("fe80::1");
+  });
+
+  it("does NOT probe when only link-local IPv6 non-loopback interfaces exist", async () => {
+    loadConfigMock.mockReturnValue(buildEmbeddedTestConfig({ bind: "loopback", host: "127.0.0.1" }));
+    // Machine with loopback + only link-local IPv6 — no probeable addresses after filtering
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      lo: [
+        { address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", cidr: null, mac: "00:00:00:00:00:00" },
+      ],
+      eth0: [
+        { address: "fe80::1", family: "IPv6", internal: false, netmask: "ffff::", cidr: null, mac: "00:00:00:00:00:00", scopeid: 2 },
+      ],
+    });
+    assertPgNotReachableOnInterfacesMock.mockResolvedValue(undefined);
+
+    await startServer();
+
+    expect(assertPgNotReachableOnInterfacesMock).not.toHaveBeenCalled();
   });
 
   it("throws and stops embedded postgres when probe detects pg reachable on LAN", async () => {

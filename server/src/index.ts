@@ -454,7 +454,7 @@ export async function startServer(): Promise<StartedServer> {
       const probeAddresses = [
         ...new Set(
           ifaces
-            .filter((iface) => iface && !iface.internal)
+            .filter((iface) => iface && !iface.internal && !iface.scopeid)
             .map((iface) => iface!.address),
         ),
       ];
