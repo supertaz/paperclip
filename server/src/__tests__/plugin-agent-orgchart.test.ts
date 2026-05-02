@@ -285,6 +285,30 @@ describeEmbeddedPostgres("plugin-agent-orgchart service", () => {
       const rootId = await seedAgent({ companyId });
       expect(await isDescendantOf(db, randomUUID(), rootId, companyId)).toBe(false);
     });
+
+    it("returns false when mid-chain parent escapes company (corrupt FK mid-chain)", async () => {
+      // Exercises the L130 `if (!next) break` branch in isDescendantOf.
+      // leaf (companyId) → mid (companyId) → grandparent (otherCompanyId)
+      // candidateId=leaf, ancestorId=grandparent — both are "in company" at L120
+      // (grandparent is seeded in otherCompanyId, so byId.has(ancestorId) is false → returns false at L120)
+      // To exercise L130, we need: leaf in companyId has reportsTo → mid in companyId
+      // and mid has reportsTo pointing to an agent NOT in companyId's byId map.
+      // Since isDescendantOf loads all agents WHERE companyId = companyId, a mid-chain
+      // agent in companyId with reportsTo pointing to an agent in otherCompanyId will
+      // cause `next = byId.get(current.reportsTo)` to return undefined → break.
+      companyId = await seedCompany("Co1");
+      otherCompanyId = await seedCompany("Co2");
+      const rootInOther = await seedAgent({ companyId: otherCompanyId });
+      // mid is in companyId but its reportsTo points to rootInOther (otherCompanyId)
+      const midId = await seedAgent({ companyId, reportsTo: rootInOther });
+      const leafId = await seedAgent({ companyId, reportsTo: midId });
+      // ancestorId = rootInOther is NOT in companyId, so byId.has(ancestorId)=false → returns false at L120
+      expect(await isDescendantOf(db, leafId, rootInOther, companyId)).toBe(false);
+      // Verify mid-chain break: leaf → mid → (rootInOther not in byId) → break → false
+      // Use a same-company "ancestor" that is not actually an ancestor of leafId
+      const unrelatedId = await seedAgent({ companyId });
+      expect(await isDescendantOf(db, leafId, unrelatedId, companyId)).toBe(false);
+    });
   });
 
   // --- ORG_CHART_TOO_LARGE_ERROR ---
