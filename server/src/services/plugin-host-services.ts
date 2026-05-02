@@ -520,6 +520,14 @@ export function buildHostServices(
    */
   const ensurePluginAvailableForCompany = async (_companyId: string) => {};
 
+  const ensurePluginCapability = async (capability: string) => {
+    const pluginRow = await registry.getById(pluginId);
+    const caps = (pluginRow?.manifestJson as { capabilities?: string[] } | null)?.capabilities ?? [];
+    if (!caps.includes(capability)) {
+      throw new Error(`Plugin '${pluginKey}' does not have required capability '${capability}'`);
+    }
+  };
+
   const inCompany = <T extends { companyId: string | null | undefined }>(
     record: T | null | undefined,
     companyId: string,
@@ -1601,6 +1609,7 @@ export function buildHostServices(
       async set(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
+        await ensurePluginCapability("issue.custom-fields.write");
         const pluginRow = await registry.getById(pluginId);
         const manifest = pluginRow?.manifestJson as { customFields?: Array<{ key: string; label: string; type: string; enumValues?: Array<{ id: string; label: string }> }> } | null;
         const fieldDecl = manifest?.customFields?.find((f) => f.key === params.key);
@@ -1635,6 +1644,7 @@ export function buildHostServices(
       async unset(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
+        await ensurePluginCapability("issue.custom-fields.write");
         const didUnset = await issueCustomFields.unset({
           companyId,
           issueId: params.issueId,
@@ -1654,6 +1664,7 @@ export function buildHostServices(
       async listForIssue(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
+        await ensurePluginCapability("issue.custom-fields.read");
         const fields = await issueCustomFields.listForIssue({
           companyId,
           issueId: params.issueId,

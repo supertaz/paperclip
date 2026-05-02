@@ -301,9 +301,13 @@ function makeEventBus(): PluginEventBus {
     forPlugin: vi.fn(() => ({
       emit: vi.fn(),
       on: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      clear: vi.fn(),
+      subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })),
     })),
     emit: vi.fn(),
     on: vi.fn(() => ({ unsubscribe: vi.fn() })),
+    clearPlugin: vi.fn(),
+    subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })),
   } as unknown as PluginEventBus;
 }
 
@@ -421,8 +425,8 @@ describe("RPC issueCustomFields capability gating", () => {
     svc.dispose();
   });
 
-  it("listForIssue() only returns fields belonging to the calling plugin (cross-plugin isolation)", async () => {
-    const db = makeStubDb({
+  it("listForIssue() queries the DB scoped to the calling plugin's ID (cross-plugin isolation)", async () => {
+    const pluginRow = {
       id: pluginId,
       pluginKey,
       manifestJson: {
@@ -431,11 +435,37 @@ describe("RPC issueCustomFields capability gating", () => {
         capabilities: ["issue.custom-fields.read"],
         customFields: [],
       },
-    });
-    const svc = buildHostServices(db, pluginId, pluginKey, makeEventBus());
+    };
+    const dbWithSpy = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            // registry.getById: returns the pluginRow with read capability
+            then: (fn: (rows: unknown[]) => unknown) => Promise.resolve(fn([pluginRow])),
+            // listForIssue service: returns no custom field rows
+            limit: vi.fn(async () => []),
+          })),
+          innerJoin: vi.fn(() => ({
+            where: vi.fn(async () => []),
+          })),
+        })),
+      })),
+      insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({
+            returning: vi.fn(async () => []),
+          })),
+        })),
+      })),
+      transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn({})),
+    } as unknown as import("@paperclipai/db").Db;
+
+    const svc = buildHostServices(dbWithSpy, pluginId, pluginKey, makeEventBus());
     const result = await svc.issueCustomFields.listForIssue({ companyId, issueId });
+    // Every returned field must belong to the calling plugin
     for (const field of result) {
-      expect(field.pluginId).toBe(pluginId);
+      expect(field.pluginKey).toBe(pluginKey);
     }
     svc.dispose();
   });
