@@ -51,7 +51,7 @@ import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js
 import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
 import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
 import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-services.js";
-import { createPluginEventBus, type PluginEventBus } from "./services/plugin-event-bus.js";
+import { createPluginEventBus } from "./services/plugin-event-bus.js";
 import { setPluginEventBus } from "./services/activity-log.js";
 import { createLifecycleEventPublisher } from "./services/plugin-lifecycle-event-bridge.js";
 import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
@@ -82,9 +82,6 @@ const VITE_DEV_STATIC_PATHS = new Set([
   "/sw.js",
 ]);
 
-export function wireLifecycleBridgePublisher(bus: PluginEventBus, db: import("@paperclipai/db").Db) {
-  return createLifecycleEventPublisher(bus, db);
-}
 
 export function resolveViteHmrPort(serverPort: number): number {
   if (serverPort <= 55_535) {
@@ -223,7 +220,7 @@ export async function createApp(
   const eventBus = createPluginEventBus();
   setPluginEventBus(eventBus);
   const jobStore = pluginJobStore(db);
-  const lifecycleEventPublisher = wireLifecycleBridgePublisher(eventBus, db);
+  const lifecycleEventPublisher = createLifecycleEventPublisher(eventBus, db);
   const lifecycle = pluginLifecycleManager(db, { workerManager, lifecycleEventPublisher });
   const scheduler = createPluginJobScheduler({
     db,

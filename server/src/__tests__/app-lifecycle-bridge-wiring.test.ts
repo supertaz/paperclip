@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLifecycleEventPublisher } from "../services/plugin-lifecycle-event-bridge.js";
-import { wireLifecycleBridgePublisher } from "../app.js";
 
-describe("wireLifecycleBridgePublisher (WS-3 app wiring)", () => {
+describe("createLifecycleEventPublisher (WS-3 app wiring)", () => {
   it("returns a LifecycleEventPublisher function", () => {
     const mockBus = {
       emit: vi.fn(async () => ({ errors: [] })),
@@ -16,11 +15,11 @@ describe("wireLifecycleBridgePublisher (WS-3 app wiring)", () => {
       }),
     } as never;
 
-    const publisher = wireLifecycleBridgePublisher(mockBus as never, mockDb);
+    const publisher = createLifecycleEventPublisher(mockBus as never, mockDb);
     expect(typeof publisher).toBe("function");
   });
 
-  it("returns the same type as createLifecycleEventPublisher", () => {
+  it("two calls with same args return equivalent functions", () => {
     const mockBus = {
       emit: vi.fn(async () => ({ errors: [] })),
       forPlugin: vi.fn(),
@@ -33,9 +32,9 @@ describe("wireLifecycleBridgePublisher (WS-3 app wiring)", () => {
       }),
     } as never;
 
-    const fromApp = wireLifecycleBridgePublisher(mockBus as never, mockDb);
-    const fromFactory = createLifecycleEventPublisher(mockBus as never, mockDb);
-    expect(typeof fromApp).toBe(typeof fromFactory);
+    const p1 = createLifecycleEventPublisher(mockBus as never, mockDb);
+    const p2 = createLifecycleEventPublisher(mockBus as never, mockDb);
+    expect(typeof p1).toBe(typeof p2);
   });
 
   it("calls bus.emit when publisher is invoked with a plugin record", async () => {
@@ -51,7 +50,7 @@ describe("wireLifecycleBridgePublisher (WS-3 app wiring)", () => {
       }),
     } as never;
 
-    const publisher = wireLifecycleBridgePublisher(mockBus as never, mockDb);
+    const publisher = createLifecycleEventPublisher(mockBus as never, mockDb);
     const record = {
       id: "plugin-id",
       pluginKey: "acme.test",

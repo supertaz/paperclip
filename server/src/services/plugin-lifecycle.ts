@@ -69,7 +69,11 @@ function mapTransitionToPublicEvent(
 ): import("./plugin-lifecycle-event-bridge.js").PluginLifecycleEventType | null {
   if (to === "ready") {
     if (from === "installed") return "plugin.installed";
-    // ready→ready is only used by the upgrade path (no new capabilities).
+    // ready→ready is exclusively produced by upgrade() when no new capabilities
+    // are present (the upgrade path does not go through disabled). Any other
+    // caller that reaches ready→ready will also emit plugin.enabled, which is
+    // intentional: if a plugin transitions back to ready from ready for any
+    // reason, treating it as an enable re-establishes the semantic contract.
     if (from === "disabled" || from === "error" || from === "upgrade_pending" || from === "ready") {
       return "plugin.enabled";
     }
@@ -625,7 +629,10 @@ export function pluginLifecycleManager(
       const result = await registry.uninstall(pluginId, removeData);
 
       if (lifecycleEventPublisher) {
-        await lifecycleEventPublisher("plugin.uninstalled", plugin).catch((err) => {
+        // Use result (post-uninstall record with updated status) when available;
+        // fall back to plugin snapshot for hard-delete where the row is gone.
+        const publishRecord = (result ?? plugin) as import("@paperclipai/shared").PluginRecord;
+        await lifecycleEventPublisher("plugin.uninstalled", publishRecord).catch((err) => {
           log.warn({ pluginId, err }, "lifecycle publisher failed during unload (teardown will proceed)");
         });
       }
