@@ -193,13 +193,9 @@ export function createPluginRuntimeConfigService(db: Db) {
   // -------------------------------------------------------------------------
 
   async function clearRuntime(pluginId: string): Promise<void> {
-    const existing = await getRuntime(pluginId);
-
-    if (existing.revision === "0") {
-      // No row — no-op
-      return;
-    }
-
+    // Unconditional UPDATE: if no row exists, 0 rows affected = safe no-op.
+    // Avoids the TOCTOU race where a worker INSERT commits between a pre-read
+    // "revision === 0" check and this UPDATE (operator REST path bypasses M1).
     await db
       .update(pluginConfigRuntime)
       .set({
