@@ -906,6 +906,10 @@ export const PLUGIN_EVENT_TYPES = [
   "budget.incident.resolved",
   "cost_event.created",
   "activity.logged",
+  "plugin.installed",
+  "plugin.uninstalled",
+  "plugin.enabled",
+  "plugin.disabled",
 ] as const;
 export type PluginEventType = (typeof PLUGIN_EVENT_TYPES)[number];
 
