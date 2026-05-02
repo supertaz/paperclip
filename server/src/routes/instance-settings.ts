@@ -9,6 +9,11 @@ import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { heartbeatService, instanceSettingsService, logActivity } from "../services/index.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
+import type { PluginCgroupManager } from "../services/plugin-cgroup-manager.js";
+
+export interface InstanceSettingsRoutesOptions {
+  cgroupManager?: PluginCgroupManager;
+}
 
 function assertCanManageInstanceSettings(req: Request) {
   if (req.actor.type !== "board") {
@@ -20,7 +25,7 @@ function assertCanManageInstanceSettings(req: Request) {
   throw forbidden("Instance admin access required");
 }
 
-export function instanceSettingsRoutes(db: Db) {
+export function instanceSettingsRoutes(db: Db, opts?: InstanceSettingsRoutesOptions) {
   const router = Router();
   const svc = instanceSettingsService(db);
   const heartbeat = heartbeatService(db);
@@ -66,7 +71,11 @@ export function instanceSettingsRoutes(db: Db) {
     // Experimental settings are readable by any authenticated org member
     // or instance admin. Only PATCH requires instance-admin.
     assertBoardOrgAccess(req);
-    res.json(await svc.getExperimental());
+    const [experimental, pluginCgroupActive] = await Promise.all([
+      svc.getExperimental(),
+      opts?.cgroupManager ? opts.cgroupManager.isSupported() : Promise.resolve(false),
+    ]);
+    res.json({ ...experimental, pluginCgroupActive });
   });
 
   router.patch(
