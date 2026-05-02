@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PLUGIN_CAPABILITIES } from "./constants.js";
+import { pluginManifestV1Schema } from "./validators/plugin.js";
 import type { PaperclipPluginManifestV1, PluginPeerReadsDeclaration } from "./types/plugin.js";
 
 describe("WF-3 peer-reads capability", () => {
@@ -31,5 +32,45 @@ describe("WF-3 manifest peer-reads declaration", () => {
   it("PaperclipPluginManifestV1 peerReads is optional", () => {
     const manifest: Partial<Pick<PaperclipPluginManifestV1, "peerReads">> = {};
     expect(manifest.peerReads).toBeUndefined();
+  });
+});
+
+describe("WF-3 manifest Zod schema round-trip", () => {
+  const baseManifest = {
+    id: "test.plugin",
+    apiVersion: 1 as const,
+    version: "1.0.0",
+    displayName: "Test Plugin",
+    description: "Test",
+    author: "Test",
+    categories: ["automation" as const],
+    capabilities: ["plugins.peer-reads.read" as const],
+    entrypoints: { worker: "dist/worker.js" },
+  };
+
+  it("pluginManifestV1Schema preserves peerReads through parse", () => {
+    const result = pluginManifestV1Schema.parse({
+      ...baseManifest,
+      peerReads: {
+        allow: [{ entityType: "gitea-pr", consumers: ["test.consumer"] }],
+      },
+    });
+    expect(result.peerReads).toBeDefined();
+    expect(result.peerReads?.allow[0].entityType).toBe("gitea-pr");
+    expect(result.peerReads?.allow[0].consumers).toContain("test.consumer");
+  });
+
+  it("pluginManifestV1Schema accepts manifest without peerReads", () => {
+    const result = pluginManifestV1Schema.parse(baseManifest);
+    expect(result.peerReads).toBeUndefined();
+  });
+
+  it("pluginManifestV1Schema rejects peerReads.allow with empty entityType", () => {
+    expect(() =>
+      pluginManifestV1Schema.parse({
+        ...baseManifest,
+        peerReads: { allow: [{ entityType: "", consumers: ["x"] }] },
+      }),
+    ).toThrow();
   });
 });
