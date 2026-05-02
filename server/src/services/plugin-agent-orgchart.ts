@@ -1,16 +1,24 @@
 import { and, eq, ne } from "drizzle-orm";
 import { agents } from "@paperclipai/db";
 import type { Db } from "@paperclipai/db";
+import { normalizeAgentUrlKey, ORG_CHART_TOO_LARGE_ERROR } from "@paperclipai/shared";
 import type { Agent } from "@paperclipai/shared";
 
-export const ORG_CHART_TOO_LARGE_ERROR = "ORG_CHART_TOO_LARGE" as const;
+export { ORG_CHART_TOO_LARGE_ERROR } from "@paperclipai/shared";
 
 const MAX_DESCENDANTS = 500;
 
 type AgentRow = typeof agents.$inferSelect;
 
 function toAgent(row: AgentRow): Agent {
-  return row as unknown as Agent;
+  // DB schema stores enum fields as string; the cast is safe because Drizzle
+  // constrains values at the insert/migration layer. urlKey and spentMonthlyCents
+  // are not stored in agents rows — derive them here.
+  return {
+    ...row,
+    urlKey: normalizeAgentUrlKey(row.name) ?? row.id,
+    spentMonthlyCents: 0,
+  } as unknown as Agent;
 }
 
 function buildChildrenMap(rows: AgentRow[]): Map<string, AgentRow[]> {

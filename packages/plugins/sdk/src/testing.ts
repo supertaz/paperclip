@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import {
+  ORG_CHART_TOO_LARGE_ERROR,
+} from "@paperclipai/shared";
 import type {
   PaperclipPluginManifestV1,
   PluginCapability,
@@ -1088,7 +1091,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           if (visited.has(current.id)) continue;
           visited.add(current.id);
           result.push(current);
-          if (result.length > 500) throw new Error("ORG_CHART_TOO_LARGE");
+          if (result.length > 500) throw new Error(ORG_CHART_TOO_LARGE_ERROR);
           queue.push(...(childrenMap.get(current.id) ?? []));
         }
         return result.sort((a, b) => {

@@ -368,6 +368,8 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "agents.sessions.close": "agent.sessions.close",
 
   // Agents (org-chart traversal)
+  // getDescendants and getParent also require agents.read — enforced inline in the handler
+  // because METHOD_CAPABILITY_MAP only supports one primary capability per method.
   "agents.orgChart.getDescendants": "agents.org-chart.read",
   "agents.orgChart.getParent": "agents.org-chart.read",
   "agents.orgChart.isDescendantOf": "agents.org-chart.read",
