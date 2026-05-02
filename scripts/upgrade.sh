@@ -451,6 +451,81 @@ compose_integration_candidate() {
   return 0
 }
 
+normalize_integration_migrations() {
+  local normalize_output
+
+  [ -d "$BUILD_DIR/packages/db/src/migrations" ] || return 0
+
+  normalize_output=$(BUILD_DIR="$BUILD_DIR" node <<'EOF'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const buildDir = process.env.BUILD_DIR;
+const migrationsDir = path.join(buildDir, "packages/db/src/migrations");
+const journalPath = path.join(migrationsDir, "meta/_journal.json");
+
+const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+const entries = Array.isArray(journal.entries) ? journal.entries : [];
+const journalTags = new Set(entries.map((entry) => entry.tag).filter((tag) => typeof tag === "string"));
+
+function readSqlFiles() {
+  return fs.readdirSync(migrationsDir)
+    .filter((entry) => entry.endsWith(".sql"))
+    .sort();
+}
+
+function suffix(tag) {
+  const match = tag.match(/^\d{4}_(.+)$/);
+  return match ? match[1] : null;
+}
+
+let changed = false;
+
+for (const file of readSqlFiles()) {
+  const tag = file.slice(0, -".sql".length);
+  if (journalTags.has(tag)) {
+    continue;
+  }
+
+  const fileSuffix = suffix(tag);
+  if (!fileSuffix) {
+    continue;
+  }
+
+  const targetTags = entries
+    .map((entry) => entry.tag)
+    .filter((entryTag) => typeof entryTag === "string" && suffix(entryTag) === fileSuffix);
+  const missingTargetTags = targetTags.filter((entryTag) => !fs.existsSync(path.join(migrationsDir, `${entryTag}.sql`)));
+
+  if (missingTargetTags.length !== 1) {
+    continue;
+  }
+
+  const sourcePath = path.join(migrationsDir, file);
+  const targetPath = path.join(migrationsDir, `${missingTargetTags[0]}.sql`);
+  fs.renameSync(sourcePath, targetPath);
+  console.log(`renamed ${file} -> ${missingTargetTags[0]}.sql`);
+  changed = true;
+}
+
+if (changed) {
+  fs.writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+}
+EOF
+)
+
+  if [ -n "$normalize_output" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && log "Integration: migration numbering $line"
+    done <<< "$normalize_output"
+  fi
+
+  if ! git -C "$BUILD_DIR" diff --quiet -- packages/db/src/migrations; then
+    git -C "$BUILD_DIR" add packages/db/src/migrations
+    git -C "$BUILD_DIR" commit -m "Normalize integration migration numbering" 2>>"$LOG_FILE"
+  fi
+}
+
 find_last_integrated_upstream_sha() {
   if [ -f "$INTEGRATION_MANIFEST_FILE" ]; then
     jq -r '.upstream.sha // .upstreamSha // empty' "$INTEGRATION_MANIFEST_FILE"
@@ -618,6 +693,7 @@ prepare_integration_target() {
   fi
 
   finalize_integration_compose_conflicts
+  normalize_integration_migrations
 
   TARGET_REF=$(git -C "$BUILD_DIR" rev-parse HEAD)
   echo "$TARGET_REF" > "$TARGET_REF_FILE"
