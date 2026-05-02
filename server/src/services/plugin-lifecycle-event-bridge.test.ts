@@ -143,4 +143,23 @@ describe("createLifecycleEventPublisher (WS-3)", () => {
     const firstEmit = mockBus.bus.emit.mock.calls[0][0];
     expect(firstEmit.actorType).toBe("system");
   });
+
+  it("does not throw when one company bus.emit rejects; other companies still receive event (F4)", async () => {
+    let callCount = 0;
+    const partialFailBus = {
+      emit: vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 2) throw new Error("bus.emit failed for company-b");
+        return { errors: [] };
+      }),
+      forPlugin: vi.fn(),
+      clearPlugin: vi.fn(),
+      subscriptionCount: vi.fn(() => 0),
+    };
+    const threeCompanyDb = makeMockDb(["company-a", "company-b", "company-c"]);
+    const partialPublisher = createLifecycleEventPublisher(partialFailBus as never, threeCompanyDb);
+
+    await expect(partialPublisher("plugin.installed", record)).resolves.not.toThrow();
+    expect(partialFailBus.emit).toHaveBeenCalledTimes(3);
+  });
 });

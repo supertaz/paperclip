@@ -209,4 +209,25 @@ describe("plugin lifecycle → lifecycleEventPublisher (WS-3)", () => {
     expect(eventTypes).toContain("plugin.enabled");
     expect(eventTypes).not.toContain("plugin.installed");
   });
+
+  it("plugin.uninstalled is published only after registry.uninstall marks DB as deleted (F3 durable ordering)", async () => {
+    const publishCalls: Array<{ eventType: string; pluginStillInDb: boolean }> = [];
+    const publisher: LifecycleEventPublisher = vi.fn(async (eventType) => {
+      const rows = await db.select().from(plugins);
+      const stillInDb = rows.some((r) => r.pluginKey === "test.durable-uninstall");
+      publishCalls.push({ eventType, pluginStillInDb: stillInDb });
+    });
+
+    const lifecycle = pluginLifecycleManager(db, {
+      lifecycleEventPublisher: publisher,
+    });
+
+    const pluginId = await insertPlugin("test.durable-uninstall", "ready");
+    await lifecycle.unload(pluginId);
+
+    const uninstalledCall = publishCalls.find((c) => c.eventType === "plugin.uninstalled");
+    expect(uninstalledCall).toBeDefined();
+    // Plugin must NOT still exist in DB when the event fires — durable first, then publish
+    expect(uninstalledCall!.pluginStillInDb).toBe(false);
+  });
 });
