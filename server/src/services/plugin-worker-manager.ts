@@ -88,6 +88,61 @@ const CRASH_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_STDERR_EXCERPT_CHARS = 8_000;
 
 // ---------------------------------------------------------------------------
+// Run Gate Types and broadcastBeforeRun
+// ---------------------------------------------------------------------------
+
+/** Parameters passed to each gate plugin's beforeRun handler. */
+export interface BeforeRunParams {
+  runId: string;
+  agentId: string;
+  issueId: string | null;
+  companyId: string;
+  invocationSource: string;
+}
+
+/** Result returned by a gate plugin's beforeRun handler. */
+export type BeforeRunResult = { veto: false } | { veto: true; reason: string };
+
+const BEFORE_RUN_REASON_MAX_LEN = 500;
+
+/**
+ * A gate plugin descriptor used by broadcastBeforeRun.
+ * The caller builds this list from installed plugins with run.gate capability,
+ * sorted by installOrder ascending.
+ */
+export interface BeforeRunGatePlugin {
+  pluginId: string;
+  callBeforeRun(params: BeforeRunParams): Promise<BeforeRunResult>;
+}
+
+/**
+ * Dispatch beforeRun to gate plugins in order.
+ *
+ * Stops at the first veto and returns it. Fails open on handler error
+ * (treat as veto: false). Truncates veto reasons to 500 chars.
+ */
+export async function broadcastBeforeRun(
+  gates: BeforeRunGatePlugin[],
+  params: BeforeRunParams,
+): Promise<BeforeRunResult> {
+  for (const gate of gates) {
+    let result: BeforeRunResult;
+    try {
+      result = await gate.callBeforeRun(params);
+    } catch {
+      continue;
+    }
+    if (result.veto) {
+      return {
+        veto: true,
+        reason: result.reason.slice(0, BEFORE_RUN_REASON_MAX_LEN),
+      };
+    }
+  }
+  return { veto: false };
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
