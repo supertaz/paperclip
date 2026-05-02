@@ -22,7 +22,7 @@ function mockFsModule(overrides: Record<string, unknown> = {}) {
       if (String(p).endsWith("/proc/self/cgroup")) return Promise.resolve(`0::/user.slice/user-1000.slice/user@1000.service/app.slice/test.service\n`);
       return Promise.reject(new Error(`readFile not mocked for: ${p}`));
     }),
-    rm: vi.fn().mockResolvedValue(undefined),
+    rmdir: vi.fn().mockResolvedValue(undefined),
     stat: vi.fn().mockResolvedValue({ uid: process.getuid?.() ?? 1000 }),
     access: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -113,7 +113,12 @@ describe("PluginCgroupManager — unit tests (mocked fs)", () => {
     it("does not write limit files when limits are empty", async () => {
       const { writeFile } = await import("node:fs/promises");
       await manager.setup(PLUGIN_ID, {});
-      expect(writeFile).not.toHaveBeenCalled();
+      // writeFile is called for subtree_control on intermediate dirs, but not for any limit file
+      const limitFiles = ["pids.max", "memory.high", "memory.max", "cpu.weight"];
+      const calls = vi.mocked(writeFile).mock.calls;
+      for (const [filePath] of calls) {
+        expect(limitFiles.some((f) => String(filePath).endsWith(f))).toBe(false);
+      }
     });
 
     it("rejects path traversal in pluginId", async () => {
@@ -124,16 +129,21 @@ describe("PluginCgroupManager — unit tests (mocked fs)", () => {
       await expect(manager.setup("", {})).rejects.toThrow(/invalid plugin id/i);
     });
 
-    it("tears down and retries if limit write fails partway through", async () => {
-      const { writeFile, rm } = await import("node:fs/promises");
-      let calls = 0;
-      vi.mocked(writeFile).mockImplementation(() => {
-        calls++;
-        if (calls === 1) return Promise.reject(new Error("write failed"));
-        return Promise.resolve();
+    it("rmdirs the leaf cgroup if a limit write fails partway through", async () => {
+      const { writeFile, rmdir } = await import("node:fs/promises");
+      // First N calls (subtree_control writes) succeed; the first limit write fails
+      let limitWriteAttempted = false;
+      vi.mocked(writeFile).mockImplementation((...args: Parameters<typeof writeFile>) => {
+        const filePath = String(args[0]);
+        if (filePath.endsWith("cgroup.subtree_control")) return Promise.resolve(undefined as void);
+        if (!limitWriteAttempted) {
+          limitWriteAttempted = true;
+          return Promise.reject(new Error("write failed")) as unknown as Promise<void>;
+        }
+        return Promise.resolve(undefined as void);
       });
       await expect(manager.setup(PLUGIN_ID, { pidsMax: 64 })).rejects.toThrow("write failed");
-      expect(rm).toHaveBeenCalledWith(PLUGIN_PATH, { recursive: true, force: true });
+      expect(rmdir).toHaveBeenCalledWith(PLUGIN_PATH);
     });
   });
 
@@ -154,20 +164,20 @@ describe("PluginCgroupManager — unit tests (mocked fs)", () => {
   });
 
   describe("teardown(pluginId)", () => {
-    it("writes 1 to cgroup.kill then removes the directory", async () => {
-      const { writeFile, rm } = await import("node:fs/promises");
+    it("writes 1 to cgroup.kill then rmdirs the leaf directory", async () => {
+      const { writeFile, rmdir } = await import("node:fs/promises");
       await manager.teardown(PLUGIN_ID);
       expect(writeFile).toHaveBeenCalledWith(
         path.join(PLUGIN_PATH, "cgroup.kill"),
         "1",
         "utf8",
       );
-      expect(rm).toHaveBeenCalledWith(PLUGIN_PATH, { recursive: true, force: true });
+      expect(rmdir).toHaveBeenCalledWith(PLUGIN_PATH);
     });
 
     it("is idempotent — does not throw when directory is already gone", async () => {
-      const { rm } = await import("node:fs/promises");
-      vi.mocked(rm).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      const { rmdir } = await import("node:fs/promises");
+      vi.mocked(rmdir).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
       await expect(manager.teardown(PLUGIN_ID)).resolves.toBeUndefined();
     });
 

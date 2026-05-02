@@ -1,4 +1,4 @@
-import { mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdir, writeFile, rmdir, readFile } from "node:fs/promises";
 import { platform } from "node:os";
 import * as path from "node:path";
 import type { PluginCgroupLimits } from "@paperclipai/shared";
@@ -58,11 +58,29 @@ export function createPluginCgroupManager(
 
   async function setup(pluginId: string, limits: PluginCgroupLimits): Promise<void> {
     const cgroupDir = buildPluginCgroupPath(cgroupRoot, pluginId);
+    // Create the full path including intermediate dirs
     await mkdir(cgroupDir, { recursive: true });
+    // Enable controllers at each intermediate level so the leaf can use them.
+    // These writes are idempotent — re-enabling an already-enabled controller is a no-op.
+    const intermediates = [
+      path.join(cgroupRoot, "paperclip-plugins"),
+      path.join(cgroupRoot, "paperclip-plugins", "plugin"),
+    ];
+    for (const dir of intermediates) {
+      await writeFile(
+        path.join(dir, "cgroup.subtree_control"),
+        "+pids +memory +cpu",
+        "utf8",
+      ).catch((err: NodeJS.ErrnoException) => {
+        // ENOENT: controller file absent (non-Linux or unsupported controller) — ignore
+        // EINVAL: already enabled or not available — ignore
+        if (err.code !== "ENOENT" && err.code !== "EINVAL") throw err;
+      });
+    }
     try {
       await writeLimits(cgroupDir, limits);
     } catch (err) {
-      await rm(cgroupDir, { recursive: true, force: true }).catch((rmErr) => {
+      await rmdir(cgroupDir).catch((rmErr: unknown) => {
         log.error({ rmErr: rmErr instanceof Error ? rmErr.message : String(rmErr), pluginId },
           "cgroup cleanup after limit write failure also failed");
       });
@@ -102,7 +120,9 @@ export function createPluginCgroupManager(
       }
     }
     try {
-      await rm(cgroupDir, { recursive: true, force: true });
+      // cgroup directories must be removed with rmdir, not rm -rf.
+      // The kernel removes them only when empty (no processes, no child cgroups).
+      await rmdir(cgroupDir);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") return;
