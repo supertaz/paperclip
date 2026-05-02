@@ -506,3 +506,42 @@ describe("RPC issueCustomFields capability gating", () => {
     svc.dispose();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Activity-log suppression on no-op unset
+// ---------------------------------------------------------------------------
+
+const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
+
+vi.mock("../services/activity-log.js", () => ({
+  logActivity: mockLogActivity,
+}));
+
+describe("issueCustomFields.unset() activity-log suppression", () => {
+  const companyId = "company-1";
+  const issueId = "issue-1";
+  const pluginId = "plugin-a";
+  const pluginKey = "paperclip.example";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does NOT emit activity log when unset is a no-op (field does not exist)", async () => {
+    const db = makeStubDb({
+      id: pluginId,
+      pluginKey,
+      manifestJson: {
+        id: pluginKey,
+        displayName: "Example",
+        capabilities: ["issue.custom-fields.write"],
+        customFields: [],
+      },
+    });
+    const svc = buildHostServices(db, pluginId, pluginKey, makeEventBus());
+    await svc.issueCustomFields.unset({ companyId, issueId, key: "nonexistent" });
+    // logActivity must not have been called
+    expect(mockLogActivity).not.toHaveBeenCalled();
+    svc.dispose();
+  });
+});

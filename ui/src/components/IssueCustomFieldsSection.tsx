@@ -48,9 +48,9 @@ export function IssueCustomFieldsSection({ issueId }: IssueCustomFieldsSectionPr
 
   if (isLoading || fields.length === 0) return null;
 
-  const byPlugin = new Map<string, { pluginDisplayName: string; fields: IssueCustomField[] }>();
+  const byPlugin = new Map<string, { pluginId: string; pluginDisplayName: string; fields: IssueCustomField[] }>();
   for (const field of fields) {
-    const entry = byPlugin.get(field.pluginId) ?? { pluginDisplayName: field.pluginDisplayName, fields: [] };
+    const entry = byPlugin.get(field.pluginId) ?? { pluginId: field.pluginId, pluginDisplayName: field.pluginDisplayName, fields: [] };
     entry.fields.push(field);
     byPlugin.set(field.pluginId, entry);
   }
@@ -58,7 +58,7 @@ export function IssueCustomFieldsSection({ issueId }: IssueCustomFieldsSectionPr
   return (
     <div className="flex flex-col gap-4">
       {Array.from(byPlugin.values()).map((group) => (
-        <div key={group.pluginDisplayName} className="flex flex-col gap-2">
+        <div key={group.pluginId} className="flex flex-col gap-2">
           <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
             {group.pluginDisplayName}
           </div>

@@ -126,7 +126,7 @@ export interface IssueCustomField {
   type: IssueCustomFieldType;
   /** Human-readable label from manifest, denormalized at write time. */
   label: string;
-  /** Stored value as string; non-null for text/url/enum-ref when set. Null when type=number and only valueNumber is used. */
+  /** Stored value as string. Non-null for all types when set; for number fields this is the original input string (e.g. "3.14"). */
   valueText: string | null;
   /** Parsed numeric value; non-null only when type=number. */
   valueNumber: number | null;

@@ -59,8 +59,6 @@ export interface IssueCustomFieldEnumValue {
 /**
  * Declares an issue custom field in a plugin manifest.
  * Requires `issue.custom-fields.read` / `issue.custom-fields.write` capabilities.
- *
- * @see CORE-ADDITIONS.md §WS-4
  */
 export interface IssueCustomFieldDeclaration {
   /** Stable key unique within this plugin — ^[a-z][a-z0-9_-]*$, max 64 chars. */

@@ -621,7 +621,7 @@ export const pluginManifestV1Schema = z.object({
     }
   }
 
-  // customFields require issue.custom-fields.write capability
+  // customFields declarations require write capability; read is optional (a plugin may write-only).
   if (manifest.customFields && manifest.customFields.length > 0) {
     if (!manifest.capabilities.includes("issue.custom-fields.write")) {
       ctx.addIssue({
