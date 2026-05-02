@@ -53,8 +53,9 @@ function safeEnv(): Record<string, string> {
 function makeSpawnRunner(cliBin: string, socketPath?: string): CliRunner {
   return (args, runOpts) => {
     return new Promise((resolve, reject) => {
-      const env = safeEnv();
-      if (socketPath) {
+      // Use caller-supplied env (already built by run()) if present; otherwise build here.
+      const env = runOpts?.env ?? safeEnv();
+      if (socketPath && !env["DOCKER_HOST"]) {
         env["DOCKER_HOST"] = socketPath;
       }
 
@@ -197,7 +198,11 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
     },
 
     async exec(engineContainerId, cmd, execOpts) {
-      const args = ["exec", engineContainerId, ...cmd];
+      const args = ["exec"];
+      for (const [k, v] of Object.entries(execOpts?.env ?? {})) {
+        args.push("-e", `${k}=${v}`);
+      }
+      args.push(engineContainerId, ...cmd);
 
       const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10MB
       const result = await run(args, { timeoutMs: execOpts?.timeoutMs });
@@ -232,8 +237,11 @@ export function createDockerDriver(opts: DockerDriverOpts): DockerDriver {
           const labelsRaw = (row["Labels"] as string) ?? "";
           const labels: Record<string, string> = {};
           for (const pair of labelsRaw.split(",").filter(Boolean)) {
-            const [k, v] = pair.split("=");
-            if (k) labels[k] = v ?? "";
+            const eqIdx = pair.indexOf("=");
+            if (eqIdx === -1) continue;
+            const k = pair.slice(0, eqIdx);
+            const v = pair.slice(eqIdx + 1);
+            if (k) labels[k] = v;
           }
           containers.push({
             engineContainerId: String(row["ID"] ?? ""),

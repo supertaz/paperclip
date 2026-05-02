@@ -198,8 +198,8 @@ export async function createApp(
         memoryMbMax: containerEngineSettings.memoryMbMax,
       })
     : null;
-  if (dockerDriver) {
-    await dockerDriver.onStartup();
+  if (containerService) {
+    await containerService.onStartup();
   }
 
   // Mount API routes
