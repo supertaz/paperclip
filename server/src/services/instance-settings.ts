@@ -16,6 +16,15 @@ import { eq } from "drizzle-orm";
 
 const DEFAULT_SINGLETON_KEY = "default";
 
+const DEFAULT_CONTAINER_ENGINE_SETTINGS: InstanceGeneralSettings["containerEngine"] = {
+  driver: "disabled",
+  networkMode: "none",
+  allowRootUser: false,
+  memoryMbMax: 4096,
+  maxLifetimeSecMax: 86400,
+  concurrencyPerPlugin: 10,
+};
+
 function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
   const parsed = instanceGeneralSettingsSchema.safeParse(raw ?? {});
   if (parsed.success) {
@@ -25,6 +34,7 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
       feedbackDataSharingPreference:
         parsed.data.feedbackDataSharingPreference ?? DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
       backupRetention: parsed.data.backupRetention ?? DEFAULT_BACKUP_RETENTION,
+      containerEngine: parsed.data.containerEngine ?? DEFAULT_CONTAINER_ENGINE_SETTINGS,
     };
   }
   return {
@@ -32,6 +42,7 @@ function normalizeGeneralSettings(raw: unknown): InstanceGeneralSettings {
     keyboardShortcuts: false,
     feedbackDataSharingPreference: DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
     backupRetention: DEFAULT_BACKUP_RETENTION,
+    containerEngine: DEFAULT_CONTAINER_ENGINE_SETTINGS,
   };
 }
 
