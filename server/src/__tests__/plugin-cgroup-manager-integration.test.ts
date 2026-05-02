@@ -68,11 +68,27 @@ describe("PluginCgroupManager — integration tests (real cgroupsv2)", () => {
       return;
     }
     await ensureTestSlice();
-    // Use the manager's isSupported() which checks actual controller availability
-    // inside TEST_CGROUP_ROOT, not just that cgroupsv2 exists. CI runners may have
-    // cgroupsv2 but without pids/memory/cpu delegation into the slice.
-    const manager = createPluginCgroupManager({ cgroupRoot: TEST_CGROUP_ROOT });
-    supported = await manager.isSupported();
+    // Canary probe: attempt to actually write a limit file to a leaf cgroup.
+    // isSupported() only checks cgroup.controllers existence; on some CI runners
+    // controllers are listed but not delegated deep enough for leaf writes (EACCES).
+    // A real write probe is the only reliable skip gate.
+    const canaryDir = path.join(TEST_CGROUP_ROOT, "paperclip-plugins", "plugin", "canary.probe");
+    try {
+      const mgr = createPluginCgroupManager({ cgroupRoot: TEST_CGROUP_ROOT });
+      await mgr.setup("canary.probe", { pidsMax: 32 });
+      supported = true;
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EACCES" || code === "EPERM" || code === "EINVAL" || code === "ENOENT") {
+        supported = false;
+      } else {
+        throw err;
+      }
+    } finally {
+      await rmdir(canaryDir).catch((e: NodeJS.ErrnoException) => {
+        if (e.code !== "ENOENT" && e.code !== "EBUSY" && e.code !== "ENOTEMPTY") throw e;
+      });
+    }
   });
 
   afterEach(async () => {

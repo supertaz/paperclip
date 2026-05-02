@@ -73,7 +73,7 @@ export const instanceExperimentalSettingsSchema = z.object({
     .default(DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS),
   pluginCgroupDefaults: pluginCgroupLimitsSchema.default({}),
   pluginCgroupOverrides: z.record(
-    z.string().regex(PLUGIN_ID_REGEX, "Plugin ID must match ^[a-z][a-z0-9._-]*$"),
+    z.string().regex(PLUGIN_ID_REGEX, "Plugin ID must match ^[a-z][a-z0-9._-]+$"),
     pluginCgroupLimitsSchema,
   ).default({}),
 }).strict();

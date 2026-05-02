@@ -185,7 +185,9 @@ export function createPluginCgroupManager(
     defaults: PluginCgroupLimits | undefined,
     overrides: PluginCgroupLimits | undefined,
   ): PluginCgroupLimits {
-    return { ...(defaults ?? {}), ...(overrides ?? {}) };
+    const merged = { ...(defaults ?? {}), ...(overrides ?? {}) };
+    validateLimits(merged);
+    return merged;
   }
 
   return { isSupported, setup, enterCgroup, teardown, checkOomKill, cgroupPath, effectiveLimits };
