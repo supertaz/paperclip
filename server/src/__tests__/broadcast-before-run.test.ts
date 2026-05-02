@@ -36,14 +36,14 @@ describe("broadcastBeforeRun", () => {
     expect(result).toEqual({ veto: false });
   });
 
-  it("returns first veto encountered (in order)", async () => {
+  it("returns first veto encountered (in order) with vetoPluginId", async () => {
     const gates = [
       makeGate({ veto: false }, "a"),
       makeGate({ veto: true, reason: "blocked by b" }, "b"),
       makeGate({ veto: true, reason: "blocked by c" }, "c"),
     ];
     const result = await broadcastBeforeRun(gates, params);
-    expect(result).toEqual({ veto: true, reason: "blocked by b" });
+    expect(result).toEqual({ veto: true, reason: "blocked by b", vetoPluginId: "b" });
   });
 
   it("stops calling subsequent gates after first veto", async () => {
@@ -58,13 +58,31 @@ describe("broadcastBeforeRun", () => {
     const longReason = "x".repeat(600);
     const gates = [makeGate({ veto: true, reason: longReason }, "a")];
     const result = await broadcastBeforeRun(gates, params);
-    expect(result).toEqual({ veto: true, reason: "x".repeat(500) });
+    expect(result).toEqual({ veto: true, reason: "x".repeat(500), vetoPluginId: "a" });
   });
 
   it("fails open when gate throws (returns veto: false)", async () => {
     const gate: BeforeRunGatePlugin = {
       pluginId: "failing-plugin",
       callBeforeRun: vi.fn().mockRejectedValue(new Error("handler crashed")),
+    };
+    const result = await broadcastBeforeRun([gate], params);
+    expect(result).toEqual({ veto: false });
+  });
+
+  it("fails open when gate returns null (malformed response)", async () => {
+    const gate: BeforeRunGatePlugin = {
+      pluginId: "malformed-plugin",
+      callBeforeRun: vi.fn().mockResolvedValue(null as unknown as BeforeRunResult),
+    };
+    const result = await broadcastBeforeRun([gate], params);
+    expect(result).toEqual({ veto: false });
+  });
+
+  it("fails open when gate returns veto:true without reason (malformed)", async () => {
+    const gate: BeforeRunGatePlugin = {
+      pluginId: "malformed-plugin",
+      callBeforeRun: vi.fn().mockResolvedValue({ veto: true } as unknown as BeforeRunResult),
     };
     const result = await broadcastBeforeRun([gate], params);
     expect(result).toEqual({ veto: false });

@@ -138,7 +138,7 @@ import { environmentService } from "./environments.js";
 import { environmentRuntimeService } from "./environment-runtime.js";
 import { environmentRunOrchestrator } from "./environment-run-orchestrator.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
-import { broadcastBeforeRun } from "./plugin-worker-manager.js";
+import { broadcastBeforeRun, type BeforeRunBroadcastResult } from "./plugin-worker-manager.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -4099,17 +4099,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       const orderedGates = resolveRunGatePlugins(gatePluginRows);
       if (orderedGates.length > 0) {
+        const BEFORE_RUN_GATE_TIMEOUT_MS = 5_000;
         const gateCallables = orderedGates
           .filter((p) => mgr.isRunning(p.id))
           .map((p) => ({
             pluginId: p.id,
             callBeforeRun: (params: import("./plugin-worker-manager.js").BeforeRunParams) =>
-              mgr.call(p.id, "beforeRun", params),
+              mgr.call(p.id, "beforeRun", params, BEFORE_RUN_GATE_TIMEOUT_MS),
           }));
 
         const context = parseObject(run.contextSnapshot);
         const issueId = readNonEmptyString(context.issueId);
-        const gateResult = await broadcastBeforeRun(gateCallables, {
+        const gateResult: BeforeRunBroadcastResult = await broadcastBeforeRun(gateCallables, {
           runId: run.id,
           agentId: run.agentId,
           issueId: issueId ?? null,
@@ -4118,10 +4119,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         });
 
         if (gateResult.veto) {
-          const firstVeto = orderedGates.find((p) => mgr.isRunning(p.id));
-          await cancelQueuedRunForPluginGate(run, gateResult.reason, firstVeto?.id ?? "unknown");
+          await cancelQueuedRunForPluginGate(run, gateResult.reason, gateResult.vetoPluginId);
           logger.info(
-            { runId: run.id, reason: gateResult.reason },
+            { runId: run.id, reason: gateResult.reason, vetoPluginId: gateResult.vetoPluginId },
             "claimQueuedRun: cancelled by plugin gate",
           );
           return null;
@@ -4253,19 +4253,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     vetoPluginId: string,
   ) {
     const now = new Date();
-    const cancelled = await setRunStatus(run.id, "cancelled", {
-      finishedAt: now,
-      error: vetoReason,
-      errorCode: "plugin_gate",
-      resultJson: {
-        ...parseObject(run.resultJson),
-        stopReason: "plugin_gate",
-        effectiveTimeoutSec: 0,
-        timeoutConfigured: false,
-        timeoutSource: "plugin_gate",
-        timeoutFired: false,
-      },
-    });
+    // Guard: only cancel if still queued — prevents vetoing an already-claimed run.
+    const cancelled = await db
+      .update(heartbeatRuns)
+      .set({
+        status: "cancelled",
+        finishedAt: now,
+        error: vetoReason,
+        errorCode: "plugin_gate",
+        resultJson: {
+          ...parseObject(run.resultJson),
+          stopReason: "plugin_gate",
+          effectiveTimeoutSec: 0,
+          timeoutConfigured: false,
+          timeoutSource: "plugin_gate",
+          timeoutFired: false,
+        },
+        updatedAt: now,
+      })
+      .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
+      .returning()
+      .then((rows) => rows[0] ?? null);
     if (!cancelled) return null;
 
     await setWakeupStatus(run.wakeupRequestId, "skipped", {
