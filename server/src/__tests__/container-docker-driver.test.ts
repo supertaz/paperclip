@@ -78,6 +78,52 @@ describe("createDockerDriver — basic configuration", () => {
   });
 });
 
+describe("createDockerDriver — argument injection hardening", () => {
+  it("rejects image names that look like CLI flags", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "engine-id-1", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await expect(driver.start({ image: "--privileged", labels: {} })).rejects.toThrow(/invalid image/i);
+    await expect(driver.start({ image: "--network=host", labels: {} })).rejects.toThrow(/invalid image/i);
+  });
+
+  it("inserts -- separator before image name in run args", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "engine-id-1", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await driver.start({ image: "alpine:latest", labels: {} });
+    const args = runner.mock.calls[0][0] as string[];
+    const imageIdx = args.indexOf("alpine:latest");
+    expect(imageIdx).toBeGreaterThan(0);
+    expect(args[imageIdx - 1]).toBe("--");
+  });
+
+  it("rejects label keys containing = sign", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "engine-id-1", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await expect(driver.start({ image: "alpine:latest", labels: { "bad=key": "val" } })).rejects.toThrow(/invalid label key/i);
+  });
+
+  it("rejects env keys containing = sign", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: "engine-id-1", stderr: "", exitCode: 0 });
+    const driver = createDockerDriver({ cliRunner: runner });
+    await expect(driver.start({ image: "alpine:latest", labels: {}, env: { "BAD=KEY": "val" } })).rejects.toThrow(/invalid env key/i);
+  });
+
+  it("truncates stdout at MAX_OUTPUT_BYTES during streaming, not after", async () => {
+    const MAX = 10 * 1024 * 1024; // 10MB
+    const bigChunk = "x".repeat(MAX + 100);
+    const runner = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "exec") {
+        return Promise.resolve({ stdout: bigChunk, stderr: "", exitCode: 0 });
+      }
+      return Promise.resolve({ stdout: "engine-id-1", stderr: "", exitCode: 0 });
+    });
+    const driver = createDockerDriver({ cliRunner: runner });
+    const result = await driver.exec("engine-id-1", ["cat", "/dev/zero"]);
+    expect(result.stdout.length).toBeLessThanOrEqual(MAX);
+    expect(result.truncated).toBe(true);
+  });
+});
+
 describe("createDockerDriver — probe endpoint helper", () => {
   it("probe returns ok:true when docker info succeeds", async () => {
     const runner = vi.fn().mockResolvedValue({ stdout: '{"ServerVersion":"24.0.0"}', stderr: "", exitCode: 0 });

@@ -116,6 +116,68 @@ describe("ContainerService — concurrency cap", () => {
   });
 });
 
+describe("ContainerService — resource limit enforcement", () => {
+  it("clamps memoryMb to memoryMbMax when plugin exceeds the cap", async () => {
+    const driver = makeFakeDriver();
+    const startSpy = vi.spyOn(driver, "start");
+    const service = createContainerService({ driver, memoryMbMax: 512 });
+    await service.start("plugin-a", { image: "alpine:latest", memoryMb: 65536 });
+    const opts = startSpy.mock.calls[0][0];
+    expect(opts.memoryMb).toBeLessThanOrEqual(512);
+  });
+
+  it("always applies a lifetime timer bounded by maxLifetimeSec even if plugin omits it", async () => {
+    const driver = makeFakeDriver();
+    const killSpy = vi.spyOn(driver, "kill");
+    const service = createContainerService({ driver, maxLifetimeSec: 1 });
+    await service.start("plugin-a", { image: "alpine:latest" });
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(killSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps plugin-supplied maxLifetimeSec to service maxLifetimeSec", async () => {
+    const driver = makeFakeDriver();
+    const killSpy = vi.spyOn(driver, "kill");
+    const service = createContainerService({ driver, maxLifetimeSec: 1 });
+    await service.start("plugin-a", { image: "alpine:latest", maxLifetimeSec: 999999 });
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(killSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ContainerService — stop unregisters from registry", () => {
+  it("stop removes container from registry so it no longer counts against concurrency", async () => {
+    const service = createContainerService({ driver: makeFakeDriver(), concurrencyPerPlugin: 1 });
+    const pluginId = "stop-test";
+    const { containerId } = await service.start(pluginId, { image: "alpine:latest" });
+    await service.stop(pluginId, containerId);
+    // Should be able to start again since slot is freed
+    await expect(service.start(pluginId, { image: "alpine:latest" })).resolves.toBeDefined();
+  });
+});
+
+describe("ContainerService — paperclip.managed label written on start", () => {
+  it("sets paperclip.managed=true on every started container", async () => {
+    const driver = makeFakeDriver();
+    const startSpy = vi.spyOn(driver, "start");
+    const service = createContainerService({ driver });
+    await service.start("plugin-a", { image: "alpine:latest" });
+    const opts = startSpy.mock.calls[0][0];
+    expect(opts.labels?.["paperclip.managed"]).toBe("true");
+  });
+});
+
+describe("ContainerService — list strips internal labels", () => {
+  it("list result does not expose paperclip.* labels to plugin", async () => {
+    const service = createContainerService({ driver: makeFakeDriver() });
+    await service.start("plugin-a", { image: "alpine:latest", labels: { myLabel: "val" } });
+    const results = await service.list("plugin-a", {});
+    expect(results[0].labels["paperclip.plugin-id"]).toBeUndefined();
+    expect(results[0].labels["paperclip.managed"]).toBeUndefined();
+    expect(results[0].labels["myLabel"]).toBe("val");
+  });
+});
+
 describe("ContainerService — dispose", () => {
   it("dispose kills all containers for a plugin", async () => {
     const driver = makeFakeDriver();
