@@ -49,6 +49,36 @@ import { badRequest, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 
 // ---------------------------------------------------------------------------
+// Public lifecycle event mapping (WS-3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a status transition to the corresponding plugin-facing lifecycle event
+ * type, or null if the transition has no plugin-facing event.
+ *
+ * Uses previousStatus × newStatus rather than named internal events to avoid
+ * misclassifying upgrade completions as fresh installs (both paths emit
+ * plugin.loaded internally but represent different semantic events).
+ *
+ * plugin.uninstalled is NOT returned here — it is published directly from
+ * unload() with await-before-teardown ordering.
+ */
+function mapTransitionToPublicEvent(
+  from: PluginStatus,
+  to: PluginStatus,
+): import("./plugin-lifecycle-event-bridge.js").PluginLifecycleEventType | null {
+  if (to === "ready") {
+    if (from === "installed") return "plugin.installed";
+    // ready→ready is only used by the upgrade path (no new capabilities).
+    if (from === "disabled" || from === "error" || from === "upgrade_pending" || from === "ready") {
+      return "plugin.enabled";
+    }
+  }
+  if (to === "disabled" && from === "ready") return "plugin.disabled";
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle state machine
 // ---------------------------------------------------------------------------
 
@@ -278,6 +308,17 @@ export interface PluginLifecycleManagerOptions {
    * caller is responsible for managing worker processes externally.
    */
   workerManager?: PluginWorkerManager;
+
+  /**
+   * Optional async publisher called after each lifecycle state change. Used
+   * by the plugin lifecycle event bridge to fan out plugin.installed /
+   * plugin.uninstalled / plugin.enabled / plugin.disabled events to the
+   * PluginEventBus. The publisher is awaited before worker teardown in
+   * unload() to guarantee event delivery before the plugin's worker is stopped.
+   * Errors from the publisher are caught and logged; they never abort the
+   * lifecycle transition.
+   */
+  lifecycleEventPublisher?: import("./plugin-lifecycle-event-bridge.js").LifecycleEventPublisher;
 }
 
 /**
@@ -310,6 +351,8 @@ export function pluginLifecycleManager(
   let loaderArg: PluginLoader | undefined;
   let workerManager: PluginWorkerManager | undefined;
 
+  let lifecycleEventPublisher: import("./plugin-lifecycle-event-bridge.js").LifecycleEventPublisher | undefined;
+
   if (options && typeof options === "object" && "discoverAll" in options) {
     // Legacy: second arg is a PluginLoader directly
     loaderArg = options as PluginLoader;
@@ -317,6 +360,7 @@ export function pluginLifecycleManager(
     const opts = options as PluginLifecycleManagerOptions;
     loaderArg = opts.loader;
     workerManager = opts.workerManager;
+    lifecycleEventPublisher = opts.lifecycleEventPublisher;
   }
 
   const registry = pluginRegistryService(db);
@@ -375,6 +419,19 @@ export function pluginLifecycleManager(
       previousStatus,
       newStatus: to,
     });
+
+    // Publish the plugin-facing lifecycle event (WS-3).
+    // Mapping: previousStatus × newStatus → public event type.
+    // plugin.uninstalled is published directly from unload() with await-before-teardown
+    // ordering, so only non-uninstall transitions are handled here.
+    if (lifecycleEventPublisher) {
+      const publicEventType = mapTransitionToPublicEvent(previousStatus, to);
+      if (publicEventType) {
+        await lifecycleEventPublisher(publicEventType, result).catch((err) => {
+          log.warn({ pluginId, from: previousStatus, to, err }, "lifecycle publisher failed (non-fatal)");
+        });
+      }
+    }
 
     return result;
   }
@@ -558,6 +615,15 @@ export function pluginLifecycleManager(
           `Plugin ${plugin.pluginKey} is already uninstalled. ` +
             `Use removeData=true to permanently delete it.`,
         );
+      }
+
+      // Publish plugin.uninstalled BEFORE teardown so the plugin's worker can
+      // still run cleanup handlers during delivery (WS-3 ordering invariant).
+      // Publisher errors are caught so teardown always proceeds.
+      if (lifecycleEventPublisher) {
+        await lifecycleEventPublisher("plugin.uninstalled", plugin).catch((err) => {
+          log.warn({ pluginId, err }, "lifecycle publisher failed during unload (teardown will proceed)");
+        });
       }
 
       await deactivatePluginRuntime(pluginId, plugin.pluginKey);
