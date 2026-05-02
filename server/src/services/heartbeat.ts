@@ -1782,6 +1782,35 @@ export function resolveRunGatePlugins(rows: RunGatePluginRow[]): RunGatePluginRo
     .sort((a, b) => (a.installOrder ?? Infinity) - (b.installOrder ?? Infinity));
 }
 
+/**
+ * Creates a per-company sliding-window counter for plugin-gate cancellations.
+ * Calls `onWarn` at most once per breach window when >threshold cancels occur
+ * within windowMs for a single company.
+ */
+export function createPluginGateVetoTracker(options: {
+  threshold?: number;
+  windowMs?: number;
+  onWarn: (companyId: string, vetoPluginId: string, count: number) => void;
+}) {
+  const { threshold = 20, windowMs = 60_000, onWarn } = options;
+  const map = new Map<string, { windowStart: number; count: number; warned: boolean }>();
+  return {
+    track(companyId: string, vetoPluginId: string) {
+      const now = Date.now();
+      let entry = map.get(companyId);
+      if (!entry || now - entry.windowStart >= windowMs) {
+        entry = { windowStart: now, count: 0, warned: false };
+        map.set(companyId, entry);
+      }
+      entry.count++;
+      if (entry.count > threshold && !entry.warned) {
+        entry.warned = true;
+        onWarn(companyId, vetoPluginId, entry.count);
+      }
+    },
+  };
+}
+
 async function buildPaperclipWakePayload(input: {
   db: Db;
   companyId: string;
@@ -2199,6 +2228,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   });
   const workspaceOperationsSvc = workspaceOperationService(db);
   const activeRunExecutions = new Set<string>();
+  const pluginGateVetoTracker = createPluginGateVetoTracker({
+    onWarn(companyId, vetoPluginId, count) {
+      logger.warn(
+        { companyId, vetoPluginId, count, windowMs: 60_000 },
+        "plugin-gate veto rate exceeded threshold: >20 run cancellations in 60 s for company",
+      );
+    },
+  });
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
   };
@@ -4124,6 +4161,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             { runId: run.id, reason: gateResult.reason, vetoPluginId: gateResult.vetoPluginId },
             "claimQueuedRun: cancelled by plugin gate",
           );
+          pluginGateVetoTracker.track(run.companyId, gateResult.vetoPluginId);
           return null;
         }
       }
