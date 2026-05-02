@@ -1635,19 +1635,21 @@ export function buildHostServices(
       async unset(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        await issueCustomFields.unset({
+        const didUnset = await issueCustomFields.unset({
           companyId,
           issueId: params.issueId,
           pluginId,
           key: params.key,
         });
-        await logPluginActivity({
-          companyId,
-          action: "issue.custom_field_unset",
-          entityType: "issue",
-          entityId: params.issueId,
-          details: { fieldKey: params.key },
-        });
+        if (didUnset) {
+          await logPluginActivity({
+            companyId,
+            action: "issue.custom_field_unset",
+            entityType: "issue",
+            entityId: params.issueId,
+            details: { fieldKey: params.key },
+          });
+        }
       },
       async listForIssue(params) {
         const companyId = ensureCompanyId(params.companyId);
@@ -1657,7 +1659,9 @@ export function buildHostServices(
           issueId: params.issueId,
           pluginId,
         });
-        return fields.map((f) => ({ ...f, pluginKey, pluginDisplayName: pluginKey }));
+        const pluginRow3 = await registry.getById(pluginId);
+        const displayName = (pluginRow3?.manifestJson as { displayName?: string })?.displayName ?? pluginKey;
+        return fields.map((f) => ({ ...f, pluginKey, pluginDisplayName: displayName }));
       },
     },
 

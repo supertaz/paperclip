@@ -31,12 +31,20 @@ interface IssueCustomFieldsSectionProps {
 }
 
 export function IssueCustomFieldsSection({ issueId }: IssueCustomFieldsSectionProps) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: queryKeys.issues.customFields(issueId),
     queryFn: () => issuesApi.listCustomFields(issueId),
   });
 
   const fields = data?.customFields ?? [];
+
+  if (isError) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        Plugin custom fields unavailable.
+      </div>
+    );
+  }
 
   if (isLoading || fields.length === 0) return null;
 

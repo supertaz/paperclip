@@ -68,41 +68,43 @@ export function issueCustomFieldService(db: Db) {
       validateFieldKey(key);
       const { valueText, valueNumber } = validateAndCoerceValue(value, fieldType);
 
-      // Tenant guard: verify issue belongs to this company
-      const issueRow = await db
-        .select({ id: issues.id })
-        .from(issues)
-        .where(and(eq(issues.id, issueId), eq(issues.companyId, companyId)))
-        .for("update")
-        .limit(1);
-      if (issueRow.length === 0) {
-        throw notFound(`Issue ${issueId} not found or unauthorized for company ${companyId}`);
-      }
+      await db.transaction(async (tx) => {
+        // Tenant guard: verify issue belongs to this company
+        const issueRow = await tx
+          .select({ id: issues.id })
+          .from(issues)
+          .where(and(eq(issues.id, issueId), eq(issues.companyId, companyId)))
+          .for("update")
+          .limit(1);
+        if (issueRow.length === 0) {
+          throw notFound(`Issue ${issueId} not found or unauthorized for company ${companyId}`);
+        }
 
-      // Soft-delete any live row for this (company, issue, plugin, key) tuple
-      await db
-        .update(issueCustomFields)
-        .set({ deletedAt: sql`now()`, deletedByPluginId: pluginId })
-        .where(
-          and(
-            eq(issueCustomFields.companyId, companyId),
-            eq(issueCustomFields.issueId, issueId),
-            eq(issueCustomFields.pluginId, pluginId),
-            eq(issueCustomFields.fieldKey, key),
-            isNull(issueCustomFields.deletedAt),
-          ),
-        );
+        // Soft-delete any live row for this (company, issue, plugin, key) tuple
+        await tx
+          .update(issueCustomFields)
+          .set({ deletedAt: sql`now()`, deletedByPluginId: pluginId })
+          .where(
+            and(
+              eq(issueCustomFields.companyId, companyId),
+              eq(issueCustomFields.issueId, issueId),
+              eq(issueCustomFields.pluginId, pluginId),
+              eq(issueCustomFields.fieldKey, key),
+              isNull(issueCustomFields.deletedAt),
+            ),
+          );
 
-      // Insert the new live row
-      await db.insert(issueCustomFields).values({
-        companyId,
-        issueId,
-        pluginId,
-        fieldKey: key,
-        fieldType,
-        fieldLabel,
-        valueText,
-        valueNumber: valueNumber !== null ? String(valueNumber) : null,
+        // Insert the new live row
+        await tx.insert(issueCustomFields).values({
+          companyId,
+          issueId,
+          pluginId,
+          fieldKey: key,
+          fieldType,
+          fieldLabel,
+          valueText,
+          valueNumber: valueNumber !== null ? String(valueNumber) : null,
+        });
       });
     },
 
@@ -111,10 +113,10 @@ export function issueCustomFieldService(db: Db) {
       issueId: string;
       pluginId: string;
       key: string;
-    }): Promise<void> {
+    }): Promise<boolean> {
       const { companyId, issueId, pluginId, key } = params;
 
-      await db
+      const updated = await db
         .update(issueCustomFields)
         .set({ deletedAt: sql`now()`, deletedByPluginId: pluginId })
         .where(
@@ -125,7 +127,9 @@ export function issueCustomFieldService(db: Db) {
             eq(issueCustomFields.fieldKey, key),
             isNull(issueCustomFields.deletedAt),
           ),
-        );
+        )
+        .returning({ id: issueCustomFields.id });
+      return updated.length > 0;
     },
 
     async listForIssue(params: {
@@ -208,7 +212,7 @@ export function issueCustomFieldService(db: Db) {
         .select({
           pluginId: issueCustomFields.pluginId,
           pluginKey: plugins.pluginKey,
-          packageName: plugins.packageName,
+          manifestJson: plugins.manifestJson,
           key: issueCustomFields.fieldKey,
           type: issueCustomFields.fieldType,
           label: issueCustomFields.fieldLabel,
@@ -228,7 +232,7 @@ export function issueCustomFieldService(db: Db) {
       return rows.map((row) => ({
         pluginId: row.pluginId,
         pluginKey: row.pluginKey,
-        pluginDisplayName: row.packageName,
+        pluginDisplayName: (row.manifestJson as { displayName?: string })?.displayName ?? row.pluginKey,
         key: row.key,
         type: row.type as IssueCustomFieldType,
         label: row.label,
