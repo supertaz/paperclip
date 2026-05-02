@@ -458,6 +458,7 @@ describe("NewIssueDialog", () => {
       expect(submitButton).not.toBeUndefined();
       expect(submitButton?.hasAttribute("disabled")).toBe(false);
     });
+    expect(submitButton).not.toBeUndefined();
 
     await act(async () => {
       submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
