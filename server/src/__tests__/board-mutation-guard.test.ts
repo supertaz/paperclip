@@ -74,11 +74,12 @@ describe("boardMutationGuard", () => {
 
   // Local-implicit /issues mutations from Playwright API contexts and other
   // header-less local clients (no Origin AND no Referer) are allowed when the
-  // Host header proves the request reached us over a loopback interface OR
-  // a configured PAPERCLIP_PUBLIC_URL. supertest sends Host=127.0.0.1:<port>
-  // by default, which is loopback. The existing browser-spoof attack vector
-  // — a foreign page POSTing with a mismatched Origin — is still blocked
-  // (see anti-spoof tests below).
+  // literal Host header resolves to a loopback interface (127.0.0.1, localhost,
+  // ::1). supertest sends Host=127.0.0.1:<port> by default, which is loopback.
+  // X-Forwarded-Host is intentionally NOT considered in the fallback (it is
+  // client-controlled via untrusted proxy headers). The existing browser-spoof
+  // attack vector — a foreign page POSTing with a mismatched Origin — is still
+  // blocked (see anti-spoof tests below).
 
   it("allows local implicit issue comment mutations from header-less local clients", async () => {
     const app = createApp("board", "local_implicit");
@@ -194,13 +195,15 @@ describe("boardMutationGuard", () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  // Header-absent fallback: Playwright API contexts and reverse-proxy clients
-  // that strip Origin/Referer should still be allowed when the request reaches
-  // the server over a loopback interface OR via a configured PAPERCLIP_PUBLIC_URL.
-  // The anti-spoof intent is preserved: any caller that DOES send an Origin or
-  // Referer header must match the trusted set or be rejected; and any header-less
-  // request whose Host neither resolves to loopback nor matches the configured
-  // public URL also still 403s.
+  // Header-absent fallback: Playwright API contexts and other local clients
+  // that omit Origin/Referer are allowed when the literal Host header resolves
+  // to a loopback interface. X-Forwarded-Host is excluded because it is
+  // client-controlled. Reverse-proxy clients without a browser must use a
+  // board API key (board_key actor source); their flow does not depend on
+  // this fallback. The anti-spoof intent is preserved: any caller that DOES
+  // send an Origin or Referer header must match the trusted set or be
+  // rejected; and any header-less request whose Host does not resolve to
+  // loopback also still 403s, regardless of X-Forwarded-Host.
 
   it("allows local implicit issue creation when Origin and Referer are both absent (Playwright API context)", async () => {
     const middleware = boardMutationGuard();
@@ -250,7 +253,7 @@ describe("boardMutationGuard", () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it("allows session board mutations when Origin and Referer are both absent and Host matches PAPERCLIP_PUBLIC_URL (reverse proxy)", async () => {
+  it("does NOT use header-absent fallback for non-loopback Host even when PAPERCLIP_PUBLIC_URL matches (reverse-proxy clients without browsers must use board API key)", async () => {
     const original = process.env.PAPERCLIP_PUBLIC_URL;
     process.env.PAPERCLIP_PUBLIC_URL = "https://internal.svc:8443";
     try {
@@ -273,12 +276,67 @@ describe("boardMutationGuard", () => {
 
       middleware(req, res, next);
 
-      expect(next).toHaveBeenCalledOnce();
-      expect(res.status).not.toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
     } finally {
       if (original === undefined) delete process.env.PAPERCLIP_PUBLIC_URL;
       else process.env.PAPERCLIP_PUBLIC_URL = original;
     }
+  });
+
+  it("rejects header-absent fallback when X-Forwarded-Host claims loopback but Host is non-loopback (anti-spoof)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: (name: string) => {
+        const lower = name.toLowerCase();
+        if (lower === "host") return "evil.example.com";
+        if (lower === "x-forwarded-host") return "127.0.0.1:34521";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Issue mutation requires trusted browser origin or authenticated actor",
+    });
+  });
+
+  it("rejects header-absent fallback when X-Forwarded-Host claims localhost but Host is non-loopback (anti-spoof)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: (name: string) => {
+        const lower = name.toLowerCase();
+        if (lower === "host") return "internal-victim.example.com";
+        if (lower === "x-forwarded-host") return "localhost";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 
   it("blocks header-absent fallback when Host is non-loopback and no PAPERCLIP_PUBLIC_URL is configured", async () => {
