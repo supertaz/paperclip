@@ -62,6 +62,8 @@ import { logger } from "../middleware/logger.js";
  *
  * plugin.uninstalled is NOT returned here — it is published directly from
  * unload() with await-before-teardown ordering.
+ *
+ * See also: plugin-lifecycle-event-bridge.ts for the fan-out publisher.
  */
 function mapTransitionToPublicEvent(
   from: PluginStatus,
