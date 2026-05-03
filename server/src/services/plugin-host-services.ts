@@ -470,7 +470,7 @@ export function buildHostServices(
   eventBus: PluginEventBus,
   notifyWorker?: (method: string, params: unknown) => void,
   options: { pluginWorkerManager?: PluginWorkerManager; containerService?: ContainerService } = {},
-): HostServices & { dispose(): void } {
+): Omit<HostServices, "host"> & { dispose(): void } {
   const registry = pluginRegistryService(db);
   const stateStore = pluginStateStore(db);
   const runtimeConfig = createPluginRuntimeConfigService(db);
