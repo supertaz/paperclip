@@ -46,6 +46,12 @@ function hostnameOf(hostHeader: string): string | null {
 }
 
 function isLoopbackHost(hostHeader: string): boolean {
+  // Strict allowlist of canonical loopback spellings. Variants like
+  // "localhost." (FQDN trailing dot), "::1%lo" (ipv6 zone identifier), or
+  // "127.000.000.001" (leading-zero IPv4) are deliberately rejected: the
+  // narrow contract is "the request claims one of the canonical loopback
+  // identities" and exotic variants should authenticate explicitly rather
+  // than be normalized into the trust set.
   const host = hostnameOf(hostHeader);
   if (!host) return false;
   return host === "127.0.0.1" || host === "localhost" || host === "::1";
@@ -67,8 +73,13 @@ function isTrustedBoardMutationRequest(req: Request) {
   //
   // X-Forwarded-Host is intentionally NOT considered here: it is a client-
   // supplied proxy header and would let an external caller bypass the gate
-  // by spoofing "X-Forwarded-Host: localhost". Host, by contrast, is set by
-  // the client TCP connection and sent directly to the server.
+  // by spoofing "X-Forwarded-Host: localhost". The Host header is also
+  // technically client-sent (Node surfaces the literal HTTP Host header
+  // value via req.header), but a request that arrives with Host = 127.0.0.1
+  // / localhost / ::1 must have reached us over the loopback interface
+  // (external traffic cannot reach loopback), so accepting only loopback
+  // Host values yields a usable trust signal without depending on socket
+  // introspection.
   //
   // The fallback covers Playwright API contexts (pwRequest.newContext targets
   // the e2e server on 127.0.0.1) and any local script running on the host.
