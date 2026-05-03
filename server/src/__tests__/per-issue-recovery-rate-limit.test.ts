@@ -118,6 +118,7 @@ describeEmbeddedPostgres("per-issue recovery rate limit", () => {
         companyId,
         agentId,
         status: "succeeded",
+        livenessState: "advanced",
         invocationSource: "automation",
         triggerDetail: "system",
         startedAt: createdAt,
