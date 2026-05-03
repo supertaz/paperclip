@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Puzzle, ArrowLeft, ShieldAlert, ActivitySquare, CheckCircle, XCircle, Loader2, Clock, Cpu, Webhook, CalendarClock, AlertTriangle, Database } from "lucide-react";
+import { Puzzle, ArrowLeft, ShieldAlert, ShieldCheck, ActivitySquare, CheckCircle, XCircle, Loader2, Clock, Cpu, Webhook, CalendarClock, AlertTriangle, Database } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { Link, Navigate, useParams } from "@/lib/router";
 import { PluginSlotMount, usePluginSlots } from "@/plugins/slots";
 import { pluginsApi } from "@/api/plugins";
 import { accessApi } from "@/api/access";
+import { approvalsApi } from "@/api/approvals";
 import { queryKeys } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -88,6 +89,13 @@ export function PluginSettings() {
     queryKey: queryKeys.plugins.logs(pluginId!),
     queryFn: () => pluginsApi.logs(pluginId!, { limit: 50 }),
     enabled: !!pluginId && plugin?.status === "ready",
+    refetchInterval: 30000,
+  });
+
+  const { data: pluginApprovalsData } = useQuery({
+    queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending", plugin?.id),
+    queryFn: () => approvalsApi.list(selectedCompanyId!, "pending", plugin?.id),
+    enabled: !!selectedCompanyId && !!plugin?.id && activeTab === "status",
     refetchInterval: 30000,
   });
 
@@ -612,6 +620,33 @@ export function PluginSettings() {
                   </CardContent>
                 </Card>
               )}
+
+              {pluginCapabilities.includes("approvals.create") ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-1.5">
+                      <ShieldCheck className="h-4 w-4" />
+                      Plugin Approvals
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {pluginApprovalsData && pluginApprovalsData.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-sm text-muted-foreground">
+                          {pluginApprovalsData.length} pending approval{pluginApprovalsData.length !== 1 ? "s" : ""} from this plugin.
+                        </p>
+                        <Link to={`/approvals/pending`}>
+                          <Button variant="outline" size="sm" className="w-full">
+                            Review Approvals
+                          </Button>
+                        </Link>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground italic">No pending approvals.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              ) : null}
             </div>
           </div>
         </TabsContent>

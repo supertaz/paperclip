@@ -38,6 +38,7 @@ import { documentService } from "./documents.js";
 import { heartbeatService } from "./heartbeat.js";
 import { budgetService } from "./budgets.js";
 import { issueApprovalService } from "./issue-approvals.js";
+import { approvalService } from "./approvals.js";
 import { subscribeCompanyLiveEvents } from "./live-events.js";
 import { randomUUID } from "node:crypto";
 import { activityService } from "./activity.js";
@@ -489,6 +490,7 @@ export function buildHostServices(
   const costs = costService(db);
   const budgets = budgetService(db);
   const issueApprovals = issueApprovalService(db);
+  const approvalsService = approvalService(db);
   const assets = assetService(db);
   const scopedBus = eventBus.forPlugin(pluginKey);
 
@@ -2020,6 +2022,127 @@ export function buildHostServices(
       async inspect(params) {
         if (!options.containerService) return null;
         return options.containerService.inspect(pluginId, params.containerId);
+      },
+    },
+
+    approvals: {
+      async create(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+
+        if (typeof params.prompt !== "string" || params.prompt.length === 0) {
+          throw new Error("approvals.create: prompt is required");
+        }
+        if (params.prompt.length > 2048) {
+          throw new Error("approvals.create: prompt must not exceed 2048 characters");
+        }
+
+        if (params.issueId) {
+          const issue = await issues.getById(params.issueId);
+          if (!inCompany(issue, companyId)) {
+            throw new Error("approvals.create: issueId does not belong to this company");
+          }
+        }
+
+        const row = await approvalsService.create(companyId, {
+          type: "plugin_workflow",
+          requestedByAgentId: params.actorAgentId ?? null,
+          requestedByUserId: null,
+          status: "pending",
+          payload: {
+            prompt: params.prompt,
+            ...(params.actorRunId ? { actorRunId: params.actorRunId } : {}),
+            ...(params.payload ?? {}),
+          },
+          sourcePluginId: pluginId,
+          sourcePluginKey: pluginKey,
+        });
+
+        if (params.issueId && row) {
+          await issueApprovals.link(params.issueId, row.id);
+        }
+
+        return { approvalId: row!.id, status: row!.status };
+      },
+
+      async get(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const row = await approvalsService.getById(params.approvalId);
+        if (!row || row.companyId !== companyId || row.sourcePluginId !== pluginId) return null;
+        const linkedIssues = await issueApprovals.listIssuesForApproval(row.id);
+        const issueId = linkedIssues[0]?.id ?? null;
+        const rowPayload = (row.payload ?? {}) as Record<string, unknown>;
+        return {
+          id: row.id,
+          companyId: row.companyId,
+          sourcePluginId: row.sourcePluginId ?? pluginId,
+          sourcePluginKey: row.sourcePluginKey ?? pluginKey,
+          issueId,
+          prompt: typeof rowPayload.prompt === "string" ? rowPayload.prompt : "",
+          status: row.status as "pending" | "approved" | "rejected" | "cancelled" | "revision_requested",
+          payload: rowPayload,
+          decisionNote: row.decisionNote ?? null,
+          decidedByUserId: row.decidedByUserId ?? null,
+          decidedAt: row.decidedAt?.toISOString() ?? null,
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        };
+      },
+
+      async list(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const limit = Math.min(typeof params.limit === "number" ? params.limit : 100, 100);
+        const offset = typeof params.offset === "number" ? params.offset : 0;
+        const rows = await approvalsService.listByPlugin(pluginId, companyId, params.status, limit, offset);
+        return rows.map((row) => {
+          const rowPayload = (row.payload ?? {}) as Record<string, unknown>;
+          return {
+            id: row.id,
+            companyId: row.companyId,
+            sourcePluginId: row.sourcePluginId ?? pluginId,
+            sourcePluginKey: row.sourcePluginKey ?? pluginKey,
+            issueId: null,
+            prompt: typeof rowPayload.prompt === "string" ? rowPayload.prompt : "",
+            status: row.status as "pending" | "approved" | "rejected" | "cancelled" | "revision_requested",
+            payload: rowPayload,
+            decisionNote: row.decisionNote ?? null,
+            decidedByUserId: row.decidedByUserId ?? null,
+            decidedAt: row.decidedAt?.toISOString() ?? null,
+            createdAt: row.createdAt.toISOString(),
+            updatedAt: row.updatedAt.toISOString(),
+          };
+        });
+      },
+
+      async subscribe(params) {
+        const row = await approvalsService.getById(params.approvalId);
+        // sourcePluginId check is sufficient isolation: pluginId is server-enforced
+        // (from the plugin worker's registered identity), not caller-supplied.
+        if (!row || row.sourcePluginId !== pluginId) {
+          return { status: "not_found" };
+        }
+        return { status: row.status };
+      },
+
+      async cancel(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        const row = await approvalsService.getById(params.approvalId);
+        if (!row || row.companyId !== companyId || row.sourcePluginId !== pluginId) return;
+        if (row.status !== "pending") return;
+        const cancelResult = await approvalsService.cancel(params.approvalId, params.reason);
+        if (cancelResult && notifyWorker) {
+          const now = new Date().toISOString();
+          notifyWorker("approvals.resolved", {
+            approvalId: params.approvalId,
+            status: "cancelled",
+            decisionNote: params.reason ?? null,
+            decidedByUserId: null,
+            decidedAt: now,
+          });
+        }
       },
     },
 

@@ -53,7 +53,8 @@ export function approvalRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const status = req.query.status as string | undefined;
-    const result = await svc.list(companyId, status);
+    const sourcePluginId = req.query.sourcePluginId as string | undefined;
+    const result = await svc.list(companyId, status, sourcePluginId);
     res.json(result.map((approval) => redactApprovalPayload(approval)));
   });
 
@@ -162,6 +163,19 @@ export function approvalRoutes(
         },
       });
 
+      if (approval.sourcePluginId && options.pluginWorkerManager) {
+        const worker = options.pluginWorkerManager.getWorker(approval.sourcePluginId);
+        if (worker) {
+          worker.notify("approvals.resolved", {
+            approvalId: approval.id,
+            status: "approved",
+            decisionNote: approval.decisionNote ?? null,
+            decidedByUserId: approval.decidedByUserId ?? null,
+            decidedAt: approval.decidedAt?.toISOString() ?? new Date().toISOString(),
+          });
+        }
+      }
+
       if (approval.requestedByAgentId) {
         try {
           const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
@@ -240,6 +254,19 @@ export function approvalRoutes(
     const { approval, applied } = await svc.reject(id, decidedByUserId, req.body.decisionNote);
 
     if (applied) {
+      if (approval.sourcePluginId && options.pluginWorkerManager) {
+        const worker = options.pluginWorkerManager.getWorker(approval.sourcePluginId);
+        if (worker) {
+          worker.notify("approvals.resolved", {
+            approvalId: approval.id,
+            status: "rejected",
+            decisionNote: approval.decisionNote ?? null,
+            decidedByUserId: approval.decidedByUserId ?? null,
+            decidedAt: approval.decidedAt?.toISOString() ?? new Date().toISOString(),
+          });
+        }
+      }
+
       await logActivity(db, {
         companyId: approval.companyId,
         actorType: "user",
