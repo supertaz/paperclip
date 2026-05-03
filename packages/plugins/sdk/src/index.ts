@@ -182,6 +182,7 @@ export type {
   PluginHostClient,
   ReachableUrlResult,
   PluginConfigClient,
+  PluginConfigRuntimeClient,
   PluginEventsClient,
   PluginJobsClient,
   PluginLaunchersClient,
