@@ -1069,6 +1069,36 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           });
         },
       },
+
+      plugins: {
+        peer: {
+          entities: {
+            async list(params) {
+              return callHost("plugins.peer.entities.list", {
+                companyId: params.companyId,
+                providerPluginKey: params.providerPluginKey,
+                entityType: params.entityType,
+                scopeKind: params.scopeKind,
+                scopeId: params.scopeId,
+                externalId: params.externalId,
+                limit: params.limit,
+                offset: params.offset,
+              }) as any;
+            },
+
+            async get(params) {
+              return callHost("plugins.peer.entities.get", {
+                companyId: params.companyId,
+                providerPluginKey: params.providerPluginKey,
+                entityType: params.entityType,
+                externalId: params.externalId,
+                scopeKind: params.scopeKind,
+                scopeId: params.scopeId,
+              }) as any;
+            },
+          },
+        },
+      },
     };
   }
 

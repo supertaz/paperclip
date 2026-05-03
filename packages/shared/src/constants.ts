@@ -636,6 +636,8 @@ export const PLUGIN_CAPABILITIES = [
   "run.gate",
   // Agent Tools
   "agent.tools.register",
+  // Cross-plugin peer reads
+  "plugins.peer-reads.read",
   // UI
   "instance.settings.register",
   "ui.sidebar.register",
