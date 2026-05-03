@@ -56,6 +56,7 @@ import {
   projectService,
   routineService,
   workProductService,
+  issueCustomFieldService,
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
@@ -416,6 +417,7 @@ export function issueRoutes(
   const workProductsSvc = workProductService(db);
   const documentsSvc = documentService(db);
   const issueReferencesSvc = issueReferenceService(db);
+  const issueCustomFieldsSvc = issueCustomFieldService(db);
   const routinesSvc = routineService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
@@ -1201,6 +1203,18 @@ export function issueRoutes(
       currentExecutionWorkspace,
       workProducts,
     });
+  });
+
+  router.get("/issues/:id/custom-fields", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    const fields = await issueCustomFieldsSvc.listAllForIssue({ companyId: issue.companyId, issueId: issue.id });
+    res.json({ customFields: fields });
   });
 
   router.get("/issues/:id/work-products", async (req, res) => {

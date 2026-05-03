@@ -246,6 +246,8 @@ export type {
   Issue,
   IssueComment,
   IssueDocumentSummary,
+  IssueCustomField,
+  IssueCustomFieldsClient,
   Agent,
   Goal,
   PluginDatabaseClient,

@@ -356,6 +356,8 @@ export {
   pluginLauncherDeclarationSchema,
   pluginDatabaseDeclarationSchema,
   pluginApiRouteDeclarationSchema,
+  pluginCustomFieldDeclarationSchema,
+  pluginCustomFieldEnumValueSchema,
   pluginManifestV1Schema,
   installPluginSchema,
   upsertPluginConfigSchema,

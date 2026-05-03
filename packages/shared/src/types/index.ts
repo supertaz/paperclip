@@ -338,4 +338,7 @@ export type {
   PluginDatabaseMigrationStatus,
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
+  IssueCustomFieldType,
+  IssueCustomFieldEnumValue,
+  IssueCustomFieldDeclaration,
 } from "./plugin.js";

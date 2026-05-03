@@ -106,6 +106,7 @@ function registerModuleMocks() {
     projectService: () => ({}),
     routineService: () => mockRoutineService,
     workProductService: () => ({}),
+    issueCustomFieldService: () => ({}),
   }));
 }
 
