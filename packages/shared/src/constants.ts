@@ -588,6 +588,7 @@ export const PLUGIN_CAPABILITIES = [
   "issue.comments.read",
   "issue.documents.read",
   "agents.read",
+  "agents.org-chart.read",
   "goals.read",
   "goals.create",
   "goals.update",
