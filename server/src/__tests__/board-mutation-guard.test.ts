@@ -74,9 +74,11 @@ describe("boardMutationGuard", () => {
 
   // Local-implicit /issues mutations from Playwright API contexts and other
   // header-less local clients (no Origin AND no Referer) are allowed when the
-  // Host header proves the request reached us over a trusted local interface.
-  // The existing browser-spoof attack vector — a foreign page POSTing with a
-  // mismatched Origin — is still blocked (see anti-spoof tests below).
+  // Host header proves the request reached us over a loopback interface OR
+  // a configured PAPERCLIP_PUBLIC_URL. supertest sends Host=127.0.0.1:<port>
+  // by default, which is loopback. The existing browser-spoof attack vector
+  // — a foreign page POSTing with a mismatched Origin — is still blocked
+  // (see anti-spoof tests below).
 
   it("allows local implicit issue comment mutations from header-less local clients", async () => {
     const app = createApp("board", "local_implicit");
@@ -194,9 +196,11 @@ describe("boardMutationGuard", () => {
 
   // Header-absent fallback: Playwright API contexts and reverse-proxy clients
   // that strip Origin/Referer should still be allowed when the request reaches
-  // the server over a trusted local interface (Host header matches the server).
+  // the server over a loopback interface OR via a configured PAPERCLIP_PUBLIC_URL.
   // The anti-spoof intent is preserved: any caller that DOES send an Origin or
-  // Referer header must match the trusted set or be rejected.
+  // Referer header must match the trusted set or be rejected; and any header-less
+  // request whose Host neither resolves to loopback nor matches the configured
+  // public URL also still 403s.
 
   it("allows local implicit issue creation when Origin and Referer are both absent (Playwright API context)", async () => {
     const middleware = boardMutationGuard();
@@ -246,15 +250,101 @@ describe("boardMutationGuard", () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it("allows session board mutations when Origin and Referer are both absent (reverse proxy)", async () => {
+  it("allows session board mutations when Origin and Referer are both absent and Host matches PAPERCLIP_PUBLIC_URL (reverse proxy)", async () => {
+    const original = process.env.PAPERCLIP_PUBLIC_URL;
+    process.env.PAPERCLIP_PUBLIC_URL = "https://internal.svc:8443";
+    try {
+      const middleware = boardMutationGuard();
+      const req = {
+        method: "POST",
+        originalUrl: "/mutate",
+        url: "/mutate",
+        actor: { type: "board", userId: "board", source: "session" },
+        header: (name: string) => {
+          if (name.toLowerCase() === "host") return "internal.svc:8443";
+          return undefined;
+        },
+      } as any;
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn(),
+      } as any;
+      const next = vi.fn();
+
+      middleware(req, res, next);
+
+      expect(next).toHaveBeenCalledOnce();
+      expect(res.status).not.toHaveBeenCalled();
+    } finally {
+      if (original === undefined) delete process.env.PAPERCLIP_PUBLIC_URL;
+      else process.env.PAPERCLIP_PUBLIC_URL = original;
+    }
+  });
+
+  it("blocks header-absent fallback when Host is non-loopback and no PAPERCLIP_PUBLIC_URL is configured", async () => {
+    const original = process.env.PAPERCLIP_PUBLIC_URL;
+    delete process.env.PAPERCLIP_PUBLIC_URL;
+    try {
+      const middleware = boardMutationGuard();
+      const req = {
+        method: "POST",
+        originalUrl: "/api/issues/issue-1/comments",
+        url: "/api/issues/issue-1/comments",
+        actor: { type: "board", userId: "board", source: "local_implicit" },
+        header: (name: string) => {
+          if (name.toLowerCase() === "host") return "evil-internal.example.com:8443";
+          return undefined;
+        },
+      } as any;
+      const res = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn(),
+      } as any;
+      const next = vi.fn();
+
+      middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+    } finally {
+      if (original === undefined) delete process.env.PAPERCLIP_PUBLIC_URL;
+      else process.env.PAPERCLIP_PUBLIC_URL = original;
+    }
+  });
+
+  it("allows header-absent fallback when Host is ipv6 loopback", async () => {
     const middleware = boardMutationGuard();
     const req = {
       method: "POST",
-      originalUrl: "/mutate",
-      url: "/mutate",
-      actor: { type: "board", userId: "board", source: "session" },
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
       header: (name: string) => {
-        if (name.toLowerCase() === "host") return "internal.svc:8443";
+        if (name.toLowerCase() === "host") return "[::1]:34521";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it("allows header-absent fallback when Host is localhost (named loopback)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: (name: string) => {
+        if (name.toLowerCase() === "host") return "localhost:34521";
         return undefined;
       },
     } as any;
