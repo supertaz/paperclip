@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, like } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companySecrets, companySecretVersions } from "@paperclipai/db";
 import type { AgentEnvConfig, EnvBinding, SecretProvider } from "@paperclipai/shared";
@@ -160,6 +160,13 @@ export function secretService(db: Db) {
         .select()
         .from(companySecrets)
         .where(eq(companySecrets.companyId, companyId))
+        .orderBy(desc(companySecrets.createdAt)),
+
+    listPluginOwned: () =>
+      db
+        .select()
+        .from(companySecrets)
+        .where(like(companySecrets.createdByUserId, "plugin:%"))
         .orderBy(desc(companySecrets.createdAt)),
 
     getById,

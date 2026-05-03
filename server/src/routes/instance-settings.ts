@@ -7,7 +7,7 @@ import {
 } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
-import { heartbeatService, instanceSettingsService, logActivity } from "../services/index.js";
+import { heartbeatService, instanceSettingsService, logActivity, secretService } from "../services/index.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 import type { PluginCgroupManager } from "../services/plugin-cgroup-manager.js";
 
@@ -28,6 +28,7 @@ function assertCanManageInstanceSettings(req: Request) {
 export function instanceSettingsRoutes(db: Db, opts?: InstanceSettingsRoutesOptions) {
   const router = Router();
   const svc = instanceSettingsService(db);
+  const secrets = secretService(db);
   const heartbeat = heartbeatService(db);
 
   router.get("/instance/settings/general", async (req, res) => {
@@ -165,6 +166,12 @@ export function instanceSettingsRoutes(db: Db, opts?: InstanceSettingsRoutesOpti
       res.json(result);
     },
   );
+
+  router.get("/instance/secrets/plugin", async (req, res) => {
+    assertCanManageInstanceSettings(req);
+    const rows = await secrets.listPluginOwned();
+    res.json(rows);
+  });
 
   return router;
 }
