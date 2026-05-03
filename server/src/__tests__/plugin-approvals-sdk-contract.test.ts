@@ -85,7 +85,7 @@ describe("ctx.approvals SDK contract", () => {
     expect(page.length).toBe(2);
   });
 
-  it("cancel sets status to cancelled and fires no onResolved callback", async () => {
+  it("cancel sets status to cancelled and fires onResolved callback", async () => {
     const companyId = randomUUID();
     const harness = createTestHarness({ manifest: manifest(["approvals.create", "approvals.read"]) });
 
@@ -94,16 +94,19 @@ describe("ctx.approvals SDK contract", () => {
       prompt: "Cancel me.",
     });
 
-    let callbackFired = false;
-    harness.ctx.approvals.onResolved(approvalId, async () => { callbackFired = true; });
+    const received: Array<{ status: string; decisionNote: string | null }> = [];
+    harness.ctx.approvals.onResolved(approvalId, async (event) => {
+      received.push({ status: event.status, decisionNote: event.decisionNote });
+    });
 
     await harness.ctx.approvals.cancel({ approvalId, companyId, reason: "no longer needed" });
 
     const approval = await harness.ctx.approvals.get({ approvalId, companyId });
     expect(approval!.status).toBe("cancelled");
     expect(approval!.decisionNote).toBe("no longer needed");
-    // cancel via SDK ctx does not fire onResolved (only simulateApprovalResolved does)
-    expect(callbackFired).toBe(false);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.status).toBe("cancelled");
+    expect(received[0]!.decisionNote).toBe("no longer needed");
   });
 
   it("cancel is a no-op for already-cancelled approvals", async () => {

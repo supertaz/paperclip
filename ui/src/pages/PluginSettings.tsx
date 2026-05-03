@@ -92,11 +92,10 @@ export function PluginSettings() {
   });
 
   const { data: pluginApprovalsData } = useQuery({
-    queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending"),
-    queryFn: () => approvalsApi.list(selectedCompanyId!, "pending"),
-    enabled: !!selectedCompanyId && activeTab === "status",
+    queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending", plugin?.id),
+    queryFn: () => approvalsApi.list(selectedCompanyId!, "pending", plugin?.id),
+    enabled: !!selectedCompanyId && !!plugin?.id && activeTab === "status",
     refetchInterval: 30000,
-    select: (approvals) => approvals.filter((a) => a.sourcePluginId === plugin?.id),
   });
 
   // Fetch existing config for the plugin

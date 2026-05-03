@@ -53,7 +53,8 @@ export function approvalRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const status = req.query.status as string | undefined;
-    const result = await svc.list(companyId, status);
+    const sourcePluginId = req.query.sourcePluginId as string | undefined;
+    const result = await svc.list(companyId, status, sourcePluginId);
     res.json(result.map((approval) => redactApprovalPayload(approval)));
   });
 

@@ -1935,8 +1935,8 @@ export function buildHostServices(
         await ensurePluginAvailableForCompany(companyId);
         const limit = Math.min(typeof params.limit === "number" ? params.limit : 100, 100);
         const offset = typeof params.offset === "number" ? params.offset : 0;
-        const rows = await approvalsService.listByPlugin(pluginId, companyId, params.status);
-        return rows.slice(offset, offset + limit).map((row) => {
+        const rows = await approvalsService.listByPlugin(pluginId, companyId, params.status, limit, offset);
+        return rows.map((row) => {
           const rowPayload = (row.payload ?? {}) as Record<string, unknown>;
           return {
             id: row.id,
@@ -1972,8 +1972,8 @@ export function buildHostServices(
         const row = await approvalsService.getById(params.approvalId);
         if (!row || row.companyId !== companyId || row.sourcePluginId !== pluginId) return;
         if (row.status !== "pending") return;
-        await approvalsService.cancel(params.approvalId, params.reason);
-        if (notifyWorker) {
+        const cancelResult = await approvalsService.cancel(params.approvalId, params.reason);
+        if (cancelResult && notifyWorker) {
           const now = new Date().toISOString();
           notifyWorker("approvals.resolved", {
             approvalId: params.approvalId,

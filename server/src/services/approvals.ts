@@ -79,9 +79,10 @@ export function approvalService(db: Db) {
   }
 
   return {
-    list: (companyId: string, status?: string) => {
+    list: (companyId: string, status?: string, sourcePluginId?: string) => {
       const conditions = [eq(approvals.companyId, companyId)];
       if (status) conditions.push(eq(approvals.status, status));
+      if (sourcePluginId) conditions.push(eq(approvals.sourcePluginId, sourcePluginId));
       return db.select().from(approvals).where(and(...conditions));
     },
 
@@ -246,13 +247,13 @@ export function approvalService(db: Db) {
         .then((comments) => comments.map((comment) => redactApprovalComment(comment, censorUsernameInLogs)));
     },
 
-    listByPlugin: (pluginId: string, companyId: string, status?: string) => {
+    listByPlugin: (pluginId: string, companyId: string, status?: string, limit = 100, offset = 0) => {
       const conditions = [
         eq(approvals.companyId, companyId),
         eq(approvals.sourcePluginId, pluginId),
       ];
       if (status) conditions.push(eq(approvals.status, status));
-      return db.select().from(approvals).where(and(...conditions));
+      return db.select().from(approvals).where(and(...conditions)).limit(limit).offset(offset);
     },
 
     cancel: (id: string, reason?: string | null) => {

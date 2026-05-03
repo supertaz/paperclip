@@ -7,7 +7,9 @@ import { describe, it, expect, vi } from "vitest";
 type Row = Record<string, unknown>;
 
 function makeDb(rows: Row[] = [], updateRow: Row | null = null) {
-  const whereStub = vi.fn(async () => rows);
+  const offsetStub = vi.fn(async () => rows);
+  const limitStub = vi.fn(() => ({ offset: offsetStub }));
+  const whereStub = vi.fn(() => ({ limit: limitStub, offset: vi.fn(async () => rows), then: (fn: (r: Row[]) => unknown) => Promise.resolve(fn(rows)) }));
   const fromStub = vi.fn(() => ({ where: whereStub }));
   const selectStub = vi.fn(() => ({ from: fromStub }));
 

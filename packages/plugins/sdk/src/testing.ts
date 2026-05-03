@@ -1261,6 +1261,17 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           decidedAt: now,
           updatedAt: now,
         });
+        const cb = approvalResolutionCallbacks.get(params.approvalId);
+        if (cb) {
+          approvalResolutionCallbacks.delete(params.approvalId);
+          await cb({
+            approvalId: params.approvalId,
+            status: "cancelled",
+            decisionNote: params.reason ?? null,
+            decidedByUserId: null,
+            decidedAt: now,
+          });
+        }
       },
     },
     logger: {
