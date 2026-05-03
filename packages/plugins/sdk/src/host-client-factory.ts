@@ -219,6 +219,11 @@ export interface HostServices {
     create(params: WorkerToHostMethods["goals.create"][0]): Promise<WorkerToHostMethods["goals.create"][1]>;
     update(params: WorkerToHostMethods["goals.update"][0]): Promise<WorkerToHostMethods["goals.update"][1]>;
   };
+
+  /** Provides `host.getReachableUrl`. Requires `host.urls.discover` capability. */
+  host: {
+    getReachableUrl(params: WorkerToHostMethods["host.getReachableUrl"][0]): Promise<WorkerToHostMethods["host.getReachableUrl"][1]>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +374,9 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "goals.get": "goals.read",
   "goals.create": "goals.create",
   "goals.update": "goals.update",
+
+  // Host URL discovery
+  "host.getReachableUrl": "host.urls.discover",
 };
 
 // ---------------------------------------------------------------------------
@@ -638,6 +646,11 @@ export function createHostClientHandlers(
     }),
     "goals.update": gated("goals.update", async (params) => {
       return services.goals.update(params);
+    }),
+
+    // Host URL discovery
+    "host.getReachableUrl": gated("host.getReachableUrl", async (params) => {
+      return services.host.getReachableUrl(params);
     }),
   };
 }
