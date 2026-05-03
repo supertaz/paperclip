@@ -72,40 +72,34 @@ describe("boardMutationGuard", () => {
     expect([200, 204]).toContain(res.status);
   });
 
-  it("blocks local implicit issue comment mutations without browser origin", async () => {
+  // Local-implicit /issues mutations from Playwright API contexts and other
+  // header-less local clients (no Origin AND no Referer) are allowed when the
+  // Host header proves the request reached us over a trusted local interface.
+  // The existing browser-spoof attack vector — a foreign page POSTing with a
+  // mismatched Origin — is still blocked (see anti-spoof tests below).
+
+  it("allows local implicit issue comment mutations from header-less local clients", async () => {
     const app = createApp("board", "local_implicit");
     const res = await request(app).post("/api/issues/issue-1/comments").send({ body: "agent output" });
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({
-      error: "Issue mutation requires trusted browser origin or authenticated actor",
-    });
+    expect([200, 204]).toContain(res.status);
   });
 
-  it("blocks local implicit issue updates without browser origin", async () => {
+  it("allows local implicit issue updates from header-less local clients", async () => {
     const app = createApp("board", "local_implicit");
     const res = await request(app).patch("/api/issues/issue-1").send({ comment: "agent output" });
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({
-      error: "Issue mutation requires trusted browser origin or authenticated actor",
-    });
+    expect([200, 204]).toContain(res.status);
   });
 
-  it("blocks local implicit issue creation without browser origin", async () => {
+  it("allows local implicit issue creation from header-less local clients", async () => {
     const app = createApp("board", "local_implicit");
     const res = await request(app).post("/api/companies/company-1/issues").send({ title: "agent output" });
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({
-      error: "Issue mutation requires trusted browser origin or authenticated actor",
-    });
+    expect([200, 204]).toContain(res.status);
   });
 
-  it("blocks local implicit issue mutations on nested issue route families", async () => {
+  it("allows local implicit issue mutations on nested issue route families from header-less local clients", async () => {
     const app = createApp("board", "local_implicit");
     const res = await request(app).post("/api/projects/project-1/issues").send({ title: "agent output" });
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({
-      error: "Issue mutation requires trusted browser origin or authenticated actor",
-    });
+    expect([200, 204]).toContain(res.status);
   });
 
   it("allows local implicit browser issue mutations from trusted origin", async () => {
@@ -196,5 +190,195 @@ describe("boardMutationGuard", () => {
 
     expect(next).toHaveBeenCalledOnce();
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  // Header-absent fallback: Playwright API contexts and reverse-proxy clients
+  // that strip Origin/Referer should still be allowed when the request reaches
+  // the server over a trusted local interface (Host header matches the server).
+  // The anti-spoof intent is preserved: any caller that DOES send an Origin or
+  // Referer header must match the trusted set or be rejected.
+
+  it("allows local implicit issue creation when Origin and Referer are both absent (Playwright API context)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/companies/company-1/issues",
+      url: "/api/companies/company-1/issues",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: (name: string) => {
+        if (name.toLowerCase() === "host") return "127.0.0.1:34521";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it("allows local implicit issue comment when Origin and Referer are both absent", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: (name: string) => {
+        if (name.toLowerCase() === "host") return "127.0.0.1:34521";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it("allows session board mutations when Origin and Referer are both absent (reverse proxy)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/mutate",
+      url: "/mutate",
+      actor: { type: "board", userId: "board", source: "session" },
+      header: (name: string) => {
+        if (name.toLowerCase() === "host") return "internal.svc:8443";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  // P0 anti-spoof: header-absent fallback MUST NOT trigger when Origin OR
+  // Referer is present-but-mismatched. A spoofed Origin is an attack signal
+  // and must still 403 regardless of Host.
+
+  it("blocks local implicit issue mutation when Origin is present but mismatched (anti-spoof)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: (name: string) => {
+        const lower = name.toLowerCase();
+        if (lower === "host") return "127.0.0.1:34521";
+        if (lower === "origin") return "https://evil.example.com";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Issue mutation requires trusted browser origin or authenticated actor",
+    });
+  });
+
+  it("blocks local implicit issue mutation when Referer is present but mismatched (anti-spoof)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: (name: string) => {
+        const lower = name.toLowerCase();
+        if (lower === "host") return "127.0.0.1:34521";
+        if (lower === "referer") return "https://evil.example.com/issues/abc";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Issue mutation requires trusted browser origin or authenticated actor",
+    });
+  });
+
+  it("blocks session board mutation when Origin is present but mismatched even if Host is trusted (anti-spoof)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/mutate",
+      url: "/mutate",
+      actor: { type: "board", userId: "board", source: "session" },
+      header: (name: string) => {
+        const lower = name.toLowerCase();
+        if (lower === "host") return "internal.svc:8443";
+        if (lower === "origin") return "https://evil.example.com";
+        return undefined;
+      },
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Board mutation requires trusted browser origin",
+    });
+  });
+
+  it("blocks header-absent fallback when Host header is also absent (defense-in-depth)", async () => {
+    const middleware = boardMutationGuard();
+    const req = {
+      method: "POST",
+      originalUrl: "/api/issues/issue-1/comments",
+      url: "/api/issues/issue-1/comments",
+      actor: { type: "board", userId: "board", source: "local_implicit" },
+      header: () => undefined,
+    } as any;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as any;
+    const next = vi.fn();
+
+    middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 });
