@@ -62,37 +62,35 @@ function isTrustedBoardMutationRequest(req: Request) {
   if (refererOrigin && allowedOrigins.has(refererOrigin)) return true;
 
   // Header-absent fallback: if neither Origin nor Referer is present at all,
-  // treat the request as trusted when its Host (or X-Forwarded-Host) resolves
-  // to a loopback interface (127.0.0.1 / localhost / ::1) OR matches the
-  // explicitly-configured PAPERCLIP_PUBLIC_URL.
+  // treat the request as trusted when the literal Host header resolves to a
+  // loopback interface (127.0.0.1 / localhost / ::1).
   //
-  // - Loopback covers Playwright API contexts (pwRequest.newContext targets
-  //   the e2e server on 127.0.0.1) and any local script running on the host.
-  // - PAPERCLIP_PUBLIC_URL covers production reverse-proxy deployments where
-  //   the proxy strips Origin / Referer; operators must explicitly opt in by
-  //   configuring the public URL.
+  // X-Forwarded-Host is intentionally NOT considered here: it is a client-
+  // supplied proxy header and would let an external caller bypass the gate
+  // by spoofing "X-Forwarded-Host: localhost". Host, by contrast, is set by
+  // the client TCP connection and sent directly to the server.
+  //
+  // The fallback covers Playwright API contexts (pwRequest.newContext targets
+  // the e2e server on 127.0.0.1) and any local script running on the host.
+  //
+  // Reverse-proxy deployments without a browser (e.g. server-to-server scripts
+  // hitting the public URL with Origin / Referer stripped) are intentionally
+  // NOT covered here — they should use a board API key (req.actor.source ===
+  // "board_key", short-circuited above) or an authenticated agent identity.
+  // The PAPERCLIP_PUBLIC_URL escape hatch still applies via the Origin /
+  // Referer check above for real browsers.
   //
   // Anti-spoof intent is preserved on two axes:
   // 1. A request that DOES send Origin or Referer with a mismatched value
   //    (handled above) still 403s — the fallback only fires when both are
   //    absent.
-  // 2. An arbitrary Host pointing at an internal hostname that the operator
-  //    has not configured as PAPERCLIP_PUBLIC_URL is rejected. The earlier
-  //    "any Host" form would have let internal-network clients bypass CSRF
-  //    by simply omitting browser headers; loopback / configured-URL is the
+  // 2. An arbitrary Host pointing at any non-loopback hostname is rejected.
+  //    The earlier "any Host" form would have let internal-network clients
+  //    bypass CSRF by simply omitting browser headers; loopback-only is the
   //    narrowed boundary.
   if (originHeader === undefined && refererHeader === undefined) {
-    const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
-    const host = forwardedHost || req.header("host")?.trim();
-    if (host) {
-      if (isLoopbackHost(host)) return true;
-      const publicUrl = parseOrigin(process.env.PAPERCLIP_PUBLIC_URL?.trim());
-      if (publicUrl) {
-        const httpHost = `http://${host}`.toLowerCase();
-        const httpsHost = `https://${host}`.toLowerCase();
-        if (publicUrl === httpHost || publicUrl === httpsHost) return true;
-      }
-    }
+    const host = req.header("host")?.trim();
+    if (host && isLoopbackHost(host)) return true;
   }
 
   return false;
