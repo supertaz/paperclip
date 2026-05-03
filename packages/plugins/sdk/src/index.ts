@@ -223,6 +223,9 @@ export type {
   PluginMetricsClient,
   PluginTelemetryClient,
   PluginLogger,
+  BeforeRunParams,
+  BeforeRunResult,
+  PluginRunsClient,
 } from "./types.js";
 
 // Supporting types for context clients

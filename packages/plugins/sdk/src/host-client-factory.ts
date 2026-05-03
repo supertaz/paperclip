@@ -229,6 +229,13 @@ export interface HostServices {
   host: {
     getReachableUrl(params: WorkerToHostMethods["host.getReachableUrl"][0]): Promise<WorkerToHostMethods["host.getReachableUrl"][1]>;
   };
+
+  /** Provides `runs.registerBeforeRunHandler`. */
+  runs: {
+    registerBeforeRunHandler(
+      params: WorkerToHostMethods["runs.registerBeforeRunHandler"][0],
+    ): Promise<WorkerToHostMethods["runs.registerBeforeRunHandler"][1]>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +393,9 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
 
   // Host URL discovery
   "host.getReachableUrl": "host.urls.discover",
+
+  // Runs gate
+  "runs.registerBeforeRunHandler": "run.gate",
 };
 
 // ---------------------------------------------------------------------------
@@ -669,6 +679,10 @@ export function createHostClientHandlers(
     // Host URL discovery
     "host.getReachableUrl": gated("host.getReachableUrl", async (params) => {
       return services.host.getReachableUrl(params);
+    }),
+
+    "runs.registerBeforeRunHandler": gated("runs.registerBeforeRunHandler", async (params) => {
+      return services.runs.registerBeforeRunHandler(params);
     }),
   };
 }
